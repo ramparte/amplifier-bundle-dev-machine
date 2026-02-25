@@ -1,0 +1,141 @@
+# =============================================================================
+# {{project_name}}-fix-iteration: Single fix cycle for the health check loop
+# =============================================================================
+#
+# Called by health-check.yaml in a while loop. Each invocation:
+#   1. Reads SCRATCH.md to understand current errors (bash)
+#   2. Spawns a fresh agent session to fix them (agent: self)
+#   3. Re-runs build + test to verify and updates SCRATCH.md (bash)
+#
+# Returns JSON so the outer loop can update_context and decide whether
+# to continue looping or exit.
+#
+# =============================================================================
+
+name: "{{project_name}}-fix-iteration"
+description: "Single iteration of the health check fix cycle -- read errors, fix them, verify."
+version: "1.0.0"
+tags: ["{{project_name}}", "health-check", "fix-iteration"]
+
+context:
+  project_dir: "{{project_dir}}"
+  iteration: "0"
+
+steps:
+  # ---------------------------------------------------------------------------
+  # Step 1: Read current errors from SCRATCH.md
+  # ---------------------------------------------------------------------------
+  - id: "read-errors"
+    type: "bash"
+    command: |
+      cd {{project_dir}}
+      ITER=$(({{iteration}} + 1))
+      echo "=== FIX ITERATION $ITER ==="
+
+      if [ -f SCRATCH.md ]; then
+        SCRATCH_CONTENT=$(cat SCRATCH.md)
+      else
+        SCRATCH_CONTENT="No SCRATCH.md found. Running fresh check..."
+      fi
+
+      # Also grab raw build errors for structured data
+      BUILD_OUTPUT=$({{build_command}} 2>&1) || true
+      BUILD_ERRORS=$(echo "$BUILD_OUTPUT" | tail -30 | tr '\n' ' ' | sed 's/"/\\"/g')
+
+      echo "{\"iteration\": \"$ITER\", \"scratch\": \"see SCRATCH.md\", \"build_errors_summary\": \"$BUILD_ERRORS\"}"
+    output: "error_context"
+    parse_json: true
+    timeout: {{build_timeout}}
+    on_error: "continue"
+
+  # ---------------------------------------------------------------------------
+  # Step 2: Fresh agent session to fix the errors
+  # ---------------------------------------------------------------------------
+  - id: "fix-session"
+    agent: "self"
+    prompt: |
+      You are a HEALTH CHECK FIX SESSION for the {{project_name}} project.
+      Working directory: {{project_dir}}
+      This is fix iteration {{error_context.iteration}}.
+
+      YOUR MISSION: Fix all build errors and test failures.
+
+      START BY READING:
+      1. ./SCRATCH.md -- contains the specific errors found by the health check
+      2. The specific files mentioned in the error output
+
+      FIXING STRATEGY:
+      - Parse each error from SCRATCH.md
+      - Group errors by file
+      - For each file:
+        * Read the file
+        * Fix ALL errors in that file at once
+        * After fixing each file, run: {{build_command}} 2>&1 | tail -20
+        * Verify the errors in that file are resolved before moving on
+
+      VALIDATION:
+      - After all files are fixed, run: {{build_command}} 2>&1
+      - Then run: {{test_command}} 2>&1
+      - If build still fails, keep fixing (iterate on remaining errors)
+      - If tests fail, read the test output and fix the failures
+
+      COMMIT:
+      - Once build and tests pass, commit:
+        git add -A && git commit -m "fix: resolve build errors and test failures (health-check iteration {{error_context.iteration}})"
+
+      UPDATE SCRATCH.md:
+      - Append a section: "## Iteration {{error_context.iteration}} -- Fixes Applied"
+      - List what you fixed and the final build/test status
+
+      IMPORTANT:
+      - Do NOT add new features. Only fix existing errors.
+      - Do NOT refactor unless required to fix an error.
+      - Be surgical -- minimal changes to resolve each error.
+      - If you cannot fix an error, document it in SCRATCH.md as a known issue.
+    output: "fix_result"
+    timeout: 1800
+
+  # ---------------------------------------------------------------------------
+  # Step 3: Verify -- re-run build + test, update SCRATCH.md, output status
+  # ---------------------------------------------------------------------------
+  - id: "verify"
+    type: "bash"
+    command: |
+      cd {{project_dir}}
+      ITER={{error_context.iteration}}
+      echo "=== POST-FIX VERIFICATION (iteration $ITER) ==="
+
+      # Run build
+      BUILD_OUTPUT=$({{build_command}} 2>&1) || true
+      BUILD_EXIT=$?
+
+      # Run tests
+      TEST_OUTPUT=$({{test_command}} 2>&1) || true
+      TEST_EXIT=$?
+
+      # Update SCRATCH.md with verification results
+      echo "" >> SCRATCH.md
+      echo "## Verification After Iteration $ITER" >> SCRATCH.md
+      echo "- Build exit code: $BUILD_EXIT" >> SCRATCH.md
+      echo "- Test exit code: $TEST_EXIT" >> SCRATCH.md
+
+      if [ "$BUILD_EXIT" -ne 0 ]; then
+        echo "" >> SCRATCH.md
+        echo "### Remaining Build Errors" >> SCRATCH.md
+        echo '```' >> SCRATCH.md
+        echo "$BUILD_OUTPUT" | tail -30 >> SCRATCH.md
+        echo '```' >> SCRATCH.md
+      fi
+
+      # Output status for the outer loop
+      if [ "$BUILD_EXIT" -eq 0 ] && [ "$TEST_EXIT" -eq 0 ]; then
+        echo "{\"status\": \"done\", \"iteration\": \"$ITER\"}"
+      elif [ "$ITER" -ge {{max_fix_iterations}} ]; then
+        echo "{\"status\": \"max-iterations\", \"iteration\": \"$ITER\"}"
+      else
+        echo "{\"status\": \"checking\", \"iteration\": \"$ITER\"}"
+      fi
+    output: "verify_result"
+    parse_json: true
+    timeout: {{build_timeout}}
+    on_error: "continue"

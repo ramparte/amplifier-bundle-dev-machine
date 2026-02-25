@@ -1,0 +1,138 @@
+# =============================================================================
+# {{project_name}}-health-check: Systematic Build/Test Error Detection and Fixing
+# =============================================================================
+#
+# Complementary to build.yaml (which builds features), this recipe FIXES things.
+# It runs build and test, captures errors, spawns sessions to fix them, and
+# loops until the codebase is clean.
+#
+# Flow:
+#   1. Run build + test, capture output
+#   2. If both pass clean: done, exit successfully
+#   3. If errors exist: write findings to SCRATCH.md, dispatch fix iteration
+#   4. Loop back to step 1 (max {{max_fix_iterations}} iterations)
+#
+# Usage:
+#   amplifier recipe execute .dev-machine/health-check.yaml
+#
+# =============================================================================
+
+name: "{{project_name}}-health-check"
+description: "Systematic health check that detects build errors and test failures, spawns fixing sessions, and loops until the codebase is clean."
+version: "1.0.0"
+author: "{{project_name}} Health Check Machine"
+tags: ["health-check", "qa", "build", "test", "{{project_name}}"]
+
+context:
+  status: "checking"
+  iteration: "0"
+  project_dir: "{{project_dir}}"
+
+recursion:
+  max_depth: 5
+  max_total_steps: 200
+
+steps:
+  # ---------------------------------------------------------------------------
+  # Step 1: Initial health check -- run build + test, write SCRATCH.md
+  # ---------------------------------------------------------------------------
+  - id: "initial-check"
+    type: "bash"
+    command: |
+      cd {{project_dir}}
+      echo "=== HEALTH CHECK -- INITIAL SCAN ==="
+
+      # Run build and capture output
+      BUILD_OUTPUT=$({{build_command}} 2>&1) || true
+      BUILD_EXIT=$?
+
+      # Run tests and capture output
+      TEST_OUTPUT=$({{test_command}} 2>&1) || true
+      TEST_EXIT=$?
+
+      # Write findings to SCRATCH.md for the fixing session
+      cat > SCRATCH.md << 'SCRATCH_HEADER'
+      # Health Check Findings
+
+      SCRATCH_HEADER
+
+      echo "## Build Status" >> SCRATCH.md
+      if [ "$BUILD_EXIT" -eq 0 ]; then
+        echo "Build: CLEAN" >> SCRATCH.md
+      else
+        echo "Build: FAILED" >> SCRATCH.md
+        echo "" >> SCRATCH.md
+        echo "### Build Errors" >> SCRATCH.md
+        echo '```' >> SCRATCH.md
+        echo "$BUILD_OUTPUT" | tail -50 >> SCRATCH.md
+        echo '```' >> SCRATCH.md
+      fi
+
+      echo "" >> SCRATCH.md
+      echo "## Test Status" >> SCRATCH.md
+      if [ "$TEST_EXIT" -eq 0 ]; then
+        echo "Tests: PASSING" >> SCRATCH.md
+      else
+        echo "Tests: FAILING" >> SCRATCH.md
+        echo "" >> SCRATCH.md
+        echo "### Test Output (last 80 lines)" >> SCRATCH.md
+        echo '```' >> SCRATCH.md
+        echo "$TEST_OUTPUT" | tail -80 >> SCRATCH.md
+        echo '```' >> SCRATCH.md
+      fi
+
+      # Determine overall status
+      if [ "$BUILD_EXIT" -eq 0 ] && [ "$TEST_EXIT" -eq 0 ]; then
+        echo '{"status": "clean", "build_errors": "0", "test_status": "passing"}'
+      else
+        echo "{\"status\": \"needs-fixing\", \"build_exit\": \"$BUILD_EXIT\", \"test_exit\": \"$TEST_EXIT\"}"
+      fi
+    output: "initial_result"
+    parse_json: true
+    timeout: {{build_timeout}}
+    on_error: "continue"
+
+  # ---------------------------------------------------------------------------
+  # Step 2: Early exit if already clean
+  # ---------------------------------------------------------------------------
+  - id: "check-if-clean"
+    type: "bash"
+    condition: "{{initial_result.status}} == 'clean'"
+    command: |
+      echo "=== ALL CLEAN ==="
+      echo "Build passes, tests pass. Codebase is healthy."
+      echo '{"status": "done", "iteration": "0"}'
+    output: "clean_signal"
+    parse_json: true
+
+  # ---------------------------------------------------------------------------
+  # Step 3: Fix loop -- calls sub-recipe per iteration until clean or max
+  # ---------------------------------------------------------------------------
+  - id: "fix-loop"
+    type: "recipe"
+    recipe: "./.dev-machine/fix-iteration.yaml"
+    context:
+      project_dir: "{{project_dir}}"
+      iteration: "{{iteration}}"
+    output: "fix_result"
+    parse_json: true
+    timeout: 2400
+    on_error: "continue"
+    while_condition: "{{status}} == 'checking'"
+    max_while_iterations: {{max_fix_iterations}}
+    break_when: "{{status}} != 'checking'"
+    update_context:
+      status: "{{fix_result.verify_result.status}}"
+      iteration: "{{fix_result.verify_result.iteration}}"
+
+  # ---------------------------------------------------------------------------
+  # Step 4: Final report
+  # ---------------------------------------------------------------------------
+  - id: "final-report"
+    type: "bash"
+    command: |
+      echo "=== HEALTH CHECK COMPLETE ==="
+      echo "Final status: {{status}}"
+      echo "Iterations used: {{iteration}}"
+      cat {{project_dir}}/SCRATCH.md 2>/dev/null || echo "(no SCRATCH.md)"
+    output: "final_output"
