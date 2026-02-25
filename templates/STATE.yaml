@@ -1,0 +1,46 @@
+# =============================================================================
+# {{project_name}} -- Machine State
+# =============================================================================
+# This file is the single source of truth for project status.
+# Updated at every state transition. Any fresh session reads this to orient.
+#
+# Rules:
+# - Update after EVERY feature (not batched)
+# - Never two features without a state update between them
+# - Blockers list halts the machine when present
+# =============================================================================
+
+phase: 1
+phase_name: "Bootstrap"
+epoch: 1
+next_action: "Read architecture spec, write first batch of feature specs, begin implementation"
+blockers: []
+
+architecture_spec:
+  status: "ready"    # ready | approved | needs-revision
+  path: "{{architecture_spec}}"
+
+module_specs: {}
+  # Example:
+  # module-name:
+  #   status: "approved"
+  #   path: "specs/modules/module-name.md"
+
+features: {}
+  # Example:
+  # F-001-feature-name:
+  #   name: "Feature Name"
+  #   module: "module-name"
+  #   status: "ready"          # ready | in-progress | done | blocked
+  #   spec: "specs/features/module-name/F-001-feature-name.md"
+  #   depends_on: []
+  #   started_at: null
+  #   completed_at: null
+  #   commit: null
+
+meta:
+  project: "{{project_name}}"
+  created: "{{timestamp}}"
+  total_features_completed: 0
+  last_updated: "{{timestamp}}"
+  last_session: null
