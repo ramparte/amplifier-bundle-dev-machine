@@ -1,0 +1,122 @@
+# =============================================================================
+# {{project_name}}-qa: The QA Machine Outer Loop
+# =============================================================================
+#
+# Parallel QA machine that tests the running application:
+#   Layer A (Visual Fidelity): Captures screenshots, analyzes layout, compares
+#     against reference, fixes discrepancies.
+#   Layer B (Interactive Correctness): Uses browser automation to interact with
+#     the app (type, click, verify), fixes broken interactions.
+#
+# Each QA session starts with zero context, reads QA-STATE.yaml and
+# QA-CONTEXT-TRANSFER.md, tests one area, persists state, and exits.
+#
+# Only generated when qa_enabled is true during machine design.
+#
+# Usage:
+#   amplifier recipe execute .dev-machine/qa.yaml
+#
+# =============================================================================
+
+name: "{{project_name}}-qa"
+description: "QA machine: visual fidelity and interactive correctness testing. Reads state, dispatches testing sessions, persists progress across context windows."
+version: "1.0.0"
+author: "{{project_name}} QA Machine"
+tags: ["qa", "testing", "visual-fidelity", "interactive-testing", "{{project_name}}"]
+
+context:
+  project_dir: "{{project_dir}}"
+  qa_state_file: "{{qa_state_file}}"
+  qa_context_file: "{{qa_context_file}}"
+  status: "testing"
+  session_count: "0"
+
+steps:
+  # ---------------------------------------------------------------------------
+  # Step 1: Read QA-STATE.yaml and check for blockers
+  # ---------------------------------------------------------------------------
+  - id: "read-qa-state"
+    type: "bash"
+    command: |
+      cd {{project_dir}}
+      echo "=== QA MACHINE STARTING ==="
+      python3 << 'PYEOF'
+      import json, yaml
+      try:
+          with open("{{qa_state_file}}") as f:
+              state = yaml.safe_load(f)
+          blockers = state.get("blockers", [])
+          result = {
+              "phase": state.get("phase", "visual-fidelity"),
+              "epoch": state.get("epoch", 0),
+              "blocker_count": len(blockers),
+              "blockers": blockers,
+              "next_action": state.get("next_action", ""),
+              "status": "blocked" if blockers else "testing"
+          }
+          print(json.dumps(result))
+      except Exception as e:
+          print(json.dumps({
+              "status": "blocked",
+              "blockers": ["Failed to read QA state: " + str(e)],
+              "blocker_count": 1
+          }))
+      PYEOF
+    output: "initial_state"
+    parse_json: true
+
+  # ---------------------------------------------------------------------------
+  # Step 2: If blockers exist, print them and fail
+  # ---------------------------------------------------------------------------
+  - id: "check-blockers"
+    type: "bash"
+    condition: "{{initial_state.status}} == 'blocked'"
+    command: |
+      echo "BLOCKED: Cannot proceed. Blockers found:"
+      echo "{{initial_state.blockers}}"
+      echo ""
+      echo "Resolve blockers in {{qa_state_file}} and re-run."
+      exit 1
+    on_error: "fail"
+
+  # ---------------------------------------------------------------------------
+  # Step 3: Main QA loop -- calls sub-recipe per iteration
+  # ---------------------------------------------------------------------------
+  - id: "qa-loop"
+    type: "recipe"
+    recipe: "./.dev-machine/qa-iteration.yaml"
+    context:
+      project_dir: "{{project_dir}}"
+      qa_state_file: "{{qa_state_file}}"
+      qa_context_file: "{{qa_context_file}}"
+      session_count: "{{session_count}}"
+    output: "iteration_result"
+    parse_json: true
+    timeout: 2400
+    on_error: "continue"
+    while_condition: "{{status}} == 'testing'"
+    max_while_iterations: 20
+    break_when: "{{status}} != 'testing'"
+    update_context:
+      status: "{{iteration_result.post_result.status}}"
+      session_count: "{{iteration_result.post_result.session_count}}"
+
+  # ---------------------------------------------------------------------------
+  # Step 4: Final QA summary
+  # ---------------------------------------------------------------------------
+  - id: "final-summary"
+    type: "bash"
+    command: |
+      cd {{project_dir}}
+      echo ""
+      echo "========================================"
+      echo "  {{project_name}} QA Machine -- Run Complete"
+      echo "========================================"
+      echo ""
+      echo "  Sessions completed: {{session_count}}"
+      echo "  Final status:       {{status}}"
+      echo ""
+      echo "  QA state: {{qa_state_file}}"
+      echo ""
+      echo "========================================"
+    output: "summary"

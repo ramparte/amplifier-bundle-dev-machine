@@ -1,0 +1,137 @@
+# =============================================================================
+# {{project_name}}-qa-iteration: Single iteration of the QA machine loop
+# =============================================================================
+#
+# Called by qa.yaml in a while loop. Each invocation:
+#   1. Reads QA-STATE.yaml to orient -- find the next untested area (bash)
+#   2. Dispatches a fresh QA session to test/fix it (agent: self)
+#   3. Re-reads QA-STATE.yaml to check progress and decide next step (bash)
+#
+# Returns structured JSON so the outer loop can update_context.
+#
+# =============================================================================
+
+name: "{{project_name}}-qa-iteration"
+description: "Single iteration of the {{project_name}} QA machine -- orient, test one area, fix if broken, verify."
+version: "1.0.0"
+tags: ["{{project_name}}", "qa", "iteration", "testing"]
+
+context:
+  project_dir: "{{project_dir}}"
+  qa_state_file: "{{qa_state_file}}"
+  qa_context_file: "{{qa_context_file}}"
+  session_count: "0"
+
+steps:
+  # ---------------------------------------------------------------------------
+  # Step 1: Orient -- read QA-STATE.yaml, find next untested area
+  # ---------------------------------------------------------------------------
+  - id: "orient"
+    type: "bash"
+    command: |
+      cd {{project_dir}}
+      SESSION=$(({{session_count}} + 1))
+      echo "=== QA ITERATION $SESSION ==="
+
+      python3 << 'PYEOF'
+      import json, yaml, sys
+      try:
+          with open("{{qa_state_file}}") as f:
+              state = yaml.safe_load(f)
+          test_areas = state.get("test_areas", {})
+          for name, info in test_areas.items():
+              if info.get("status") in ("not-tested", "failing"):
+                  print(json.dumps({
+                      "next_test": name,
+                      "status": "testing",
+                      "all_areas": list(test_areas.keys())
+                  }))
+                  sys.exit(0)
+          # All areas tested
+          print(json.dumps({
+              "next_test": None,
+              "status": "done"
+          }))
+      except Exception as e:
+          print(json.dumps({"status": "blocked", "error": str(e)}))
+      PYEOF
+    output: "orient_state"
+    parse_json: true
+
+  # ---------------------------------------------------------------------------
+  # Step 2: Fresh QA agent session -- test one area, fix if broken
+  # ---------------------------------------------------------------------------
+  - id: "qa-session"
+    agent: "self"
+    condition: "{{orient_state.status}} == 'testing'"
+    prompt: |
+      You are a QA TESTING SESSION for the {{project_name}} project.
+      You start with ZERO prior context. Your job: test one area, fix if broken, persist state, exit.
+      Working directory: {{project_dir}}
+
+      START BY READING THESE FILES (in this order):
+      1. {{qa_state_file}} -- what's been tested, what's next
+      2. {{qa_context_file}} -- previous QA findings
+
+      ## Current Test Target
+      Area/Case: {{orient_state.next_test}}
+
+      ## Your Mission
+      1. Test the area described in the QA state file
+      2. If broken: read the relevant source files, fix the issue, re-test
+      3. Run {{test_command}} && {{build_command}} after any code changes
+      4. Commit fixes: fix(<module>): QA -- <description>
+
+      ## State Persistence (CRITICAL)
+      After testing the area/case:
+      - Update {{qa_state_file}}: mark the area as "passing" or "failing" with issues list
+      - Update {{qa_context_file}} with findings
+      - If you fixed code: commit immediately
+
+      ## When to Stop
+      - You've tested the current area and either it passes or you've fixed it
+      - You encounter a blocker you can't resolve -- add it to blockers in {{qa_state_file}}
+      - Stop gracefully -- the outer recipe will continue with the next area
+    output: "session_result"
+    timeout: 1800
+
+  # ---------------------------------------------------------------------------
+  # Step 3: Post-session -- re-read QA-STATE.yaml, output status for outer loop
+  # ---------------------------------------------------------------------------
+  - id: "post-session"
+    type: "bash"
+    command: |
+      cd {{project_dir}}
+      python3 << 'PYEOF'
+      import json, yaml
+      try:
+          with open("{{qa_state_file}}") as f:
+              state = yaml.safe_load(f)
+          blockers = state.get("blockers", [])
+          session_num = int("{{session_count}}") + 1
+          test_areas = state.get("test_areas", {})
+          all_passing = all(a.get("status") == "passing" for a in test_areas.values())
+          any_untested = any(a.get("status") in ("not-tested", "failing") for a in test_areas.values())
+
+          if all_passing:
+              status = "done"
+          elif blockers:
+              status = "blocked"
+          elif any_untested:
+              status = "testing"
+          else:
+              status = "done"
+
+          print(json.dumps({
+              "status": status,
+              "session_count": str(session_num)
+          }))
+      except Exception as e:
+          print(json.dumps({
+              "status": "blocked",
+              "session_count": str(int("{{session_count}}") + 1),
+              "error": str(e)
+          }))
+      PYEOF
+    output: "post_result"
+    parse_json: true
