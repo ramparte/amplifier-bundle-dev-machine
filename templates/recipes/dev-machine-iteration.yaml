@@ -1,0 +1,129 @@
+# =============================================================================
+# {{project_name}}-session-iteration: Single iteration of the development machine loop
+# =============================================================================
+#
+# Called by build.yaml in a while loop. Each invocation:
+#   1. Reads STATE.yaml to orient (bash)
+#   2. Dispatches a fresh working session (agent)
+#   3. Runs build/type-check as a structural gate (bash)
+#   4. Reads STATE.yaml again to check for blockers (bash)
+#
+# Returns structured JSON so the outer loop can update_context.
+#
+# =============================================================================
+
+name: "{{project_name}}-session-iteration"
+description: "Single iteration of the {{project_name}} development machine -- orient, work, check health."
+version: "1.0.0"
+tags: ["{{project_name}}", "iteration", "working-session"]
+
+context:
+  state_file: "{{state_file}}"
+  context_file: "{{context_file}}"
+  specs_dir: "{{specs_dir}}"
+  session_count: "0"
+
+steps:
+  # Step 1: Orient -- read STATE.yaml before dispatching the working session
+  - id: "orient"
+    type: "bash"
+    command: |
+      python3 << 'PYEOF'
+      import json, yaml
+      try:
+          with open("{{state_file}}") as f:
+              state = yaml.safe_load(f)
+          blockers = state.get("blockers", [])
+          print(json.dumps({
+              "phase": state.get("phase", 0),
+              "phase_name": state.get("phase_name", "unknown"),
+              "epoch": state.get("epoch", 0),
+              "next_action": state.get("next_action", ""),
+              "status": "blocked" if blockers else "healthy"
+          }))
+      except Exception as e:
+          print(json.dumps({"status": "blocked", "error": str(e)}))
+      PYEOF
+    output: "orient_state"
+    parse_json: true
+
+  # Step 2: Dispatch fresh working session
+  - id: "working-session"
+    agent: "self"
+    prompt: |
+      You are a WORKING SESSION of the {{project_name}} development machine.
+      You start with ZERO prior context. Your job: read state, do work, persist state, exit.
+
+      START BY READING THESE FILES (in this order):
+      1. {{state_file}} -- current phase, what's done, what's next
+      2. {{context_file}} -- recent decisions and handoff context
+      3. .dev-machine/working-session-instructions.md -- your detailed operating procedure
+
+      THEN READ THE RELEVANT SPECS:
+      4. {{architecture_spec}} -- the overall architecture (always read this)
+      5. Module specs for whatever module you're working on (check {{state_file}} module_specs)
+      6. Feature specs marked "ready" in {{state_file}} features section
+
+      YOUR MISSION THIS SESSION:
+      - Determine what work is ready from {{state_file}} (next_action + ready features)
+      - Pick the next batch of ready work ({{max_features_per_session}} features or the current next_action)
+      - For each piece of work:
+        * Update {{state_file}} to mark it in-progress with timestamp
+        * Write failing tests first (TDD)
+        * Implement minimal code to pass tests
+        * Run: {{test_command}}
+        * Run: {{build_command}}
+        * BOTH must pass before proceeding.
+        * Spawn a fresh sub-agent for antagonistic review (give it the spec + your diff)
+        * Fix any review issues found
+        * Commit: {{commit_prefix}}(<module>): <description>
+        * Update {{state_file}} to mark it done with commit hash
+      - Update {{context_file}} with decisions made and work completed
+
+      IF BLOCKED: add blocker to {{state_file}} blockers list, update {{context_file}}, stop.
+      IF DEGRADATION DETECTED (repeating yourself, losing coherence): commit work, update state, stop.
+
+      You are one session in a long chain. Persist everything to files.
+      What you don't write down is lost forever.
+    output: "session_result"
+    timeout: {{session_timeout}}
+
+  # Step 3: Structural build gate -- catches errors the agent may have missed
+  - id: "build-check"
+    type: "bash"
+    command: |
+      cd {{project_dir}}
+      echo "=== POST-SESSION BUILD CHECK ==="
+      if {{build_command}} 2>&1; then
+        echo '{"build_status": "clean"}'
+      else
+        echo "BUILD FAILED -- errors detected after working session"
+        echo "Adding blocker to {{state_file}}..."
+        python3 -c "import yaml,datetime;f=open('{{state_file}}');s=yaml.safe_load(f);f.close();b=s.get('blockers') or [];b.append({'description':'{{build_command}} failed after working session','since':datetime.datetime.now().isoformat(),'severity':'high'});s['blockers']=b;f=open('{{state_file}}','w');yaml.dump(s,f,default_flow_style=False,sort_keys=False);f.close()"
+        echo '{"build_status": "failed"}'
+      fi
+    output: "build_result"
+    timeout: {{build_timeout}}
+
+  # Step 4: Post-session -- re-read STATE.yaml to check health
+  - id: "post-session"
+    type: "bash"
+    command: |
+      python3 << 'PYEOF'
+      import json, yaml
+      try:
+          with open("{{state_file}}") as f:
+              state = yaml.safe_load(f)
+          blockers = state.get("blockers", [])
+          session_num = int("{{session_count}}") + 1
+          print(json.dumps({
+              "status": "blocked" if blockers else "healthy",
+              "session_count": str(session_num),
+              "next_action": state.get("next_action", ""),
+              "total_features": state.get("meta", {}).get("total_features_completed", 0)
+          }))
+      except Exception as e:
+          print(json.dumps({"status": "blocked", "session_count": "{{session_count}}"}))
+      PYEOF
+    output: "iteration_result"
+    parse_json: true

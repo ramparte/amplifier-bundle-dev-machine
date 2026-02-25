@@ -1,0 +1,128 @@
+# =============================================================================
+# {{project_name}}-build: The Development Machine Outer Loop
+# =============================================================================
+#
+# This is the meta-recipe -- the "machine" itself. It reads project state,
+# dispatches fresh working sessions, and loops until the project is complete
+# or a blocker is hit.
+#
+# Each working session starts with zero context, reads STATE.yaml and
+# CONTEXT-TRANSFER.md, does a bounded batch of work ({{max_features_per_session}} features),
+# persists all state back to files, and exits.
+#
+# Usage:
+#   amplifier recipe execute .dev-machine/build.yaml
+#
+# =============================================================================
+
+name: "{{project_name}}-build"
+description: "Outer orchestration loop for the {{project_name}} development machine. Reads state, dispatches working sessions, persists progress across context windows."
+version: "1.0.0"
+author: "{{project_name}} Development Machine"
+tags: ["orchestration", "meta-recipe", "development-machine", "{{project_name}}"]
+
+context:
+  state_file: "{{state_file}}"
+  context_file: "{{context_file}}"
+  specs_dir: "{{specs_dir}}"
+  status: "healthy"
+  session_count: "0"
+
+steps:
+  # ---------------------------------------------------------------------------
+  # Step 1: Read STATE.yaml and check for blockers
+  # ---------------------------------------------------------------------------
+  - id: "read-state"
+    type: "bash"
+    command: |
+      python3 << 'PYEOF'
+      import json, yaml
+      try:
+          with open("{{state_file}}") as f:
+              state = yaml.safe_load(f)
+          blockers = state.get("blockers", [])
+          result = {
+              "phase": state.get("phase", 0),
+              "phase_name": state.get("phase_name", "unknown"),
+              "epoch": state.get("epoch", 0),
+              "next_action": state.get("next_action", ""),
+              "blocker_count": len(blockers),
+              "blockers": blockers,
+              "status": "blocked" if blockers else "healthy"
+          }
+          print(json.dumps(result))
+      except Exception as e:
+          print(json.dumps({
+              "status": "blocked",
+              "blockers": ["Failed to read STATE.yaml: " + str(e)],
+              "blocker_count": 1
+          }))
+      PYEOF
+    output: "initial_state"
+    parse_json: true
+
+  # ---------------------------------------------------------------------------
+  # Step 2: If blockers exist, print them and fail
+  # ---------------------------------------------------------------------------
+  - id: "check-health"
+    type: "bash"
+    condition: "{{initial_state.status}} == 'blocked'"
+    command: |
+      echo "BLOCKED: Cannot proceed. Blockers found:"
+      printf '%s\n' '{{initial_state.blockers}}'
+      echo ""
+      printf '%s\n' "Resolve blockers in {{state_file}} and re-run."
+      exit 1
+    on_error: "fail"
+
+  # ---------------------------------------------------------------------------
+  # Step 3: Main work loop -- calls sub-recipe per iteration
+  #
+  # Each iteration: orient (read state) -> working session -> post-session check.
+  # Loop exits when status becomes "blocked" or max iterations reached.
+  # ---------------------------------------------------------------------------
+  - id: "work-loop"
+    type: "recipe"
+    recipe: "./.dev-machine/iteration.yaml"
+    context:
+      state_file: "{{state_file}}"
+      context_file: "{{context_file}}"
+      specs_dir: "{{specs_dir}}"
+      session_count: "{{session_count}}"
+    output: "iteration_result"
+    parse_json: true
+    timeout: 4200
+    on_error: "continue"
+    while_condition: "{{status}} == 'healthy'"
+    max_while_iterations: {{max_outer_iterations}}
+    break_when: "{{status}} != 'healthy'"
+    update_context:
+      status: "{{iteration_result.iteration_result.status}}"
+      session_count: "{{iteration_result.iteration_result.session_count}}"
+
+  # ---------------------------------------------------------------------------
+  # Step 4: Final summary
+  # ---------------------------------------------------------------------------
+  - id: "final-summary"
+    type: "bash"
+    command: |
+      echo ""
+      echo "========================================"
+      echo "  {{project_name}} Development Machine -- Run Complete"
+      echo "========================================"
+      echo ""
+      echo "  Sessions completed: {{session_count}}"
+      echo "  Final status:       {{status}}"
+      echo ""
+      if [ "{{status}}" = "blocked" ]; then
+        echo "  Stopped: BLOCKERS detected"
+        echo "  Check {{state_file}} for blocker details."
+      else
+        echo "  Stopped: work loop exit (max iterations or no more work)"
+      fi
+      echo ""
+      echo "  State file:    {{state_file}}"
+      echo "  Context file:  {{context_file}}"
+      echo ""
+      echo "========================================"
+    output: "summary"
