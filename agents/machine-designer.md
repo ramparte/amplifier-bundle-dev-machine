@@ -1,7 +1,7 @@
 ---
 meta:
   name: machine-designer
-  description: "Runs the founding session for an autonomous development machine. Designs the architecture spec, module boundaries, state schema, recipe configuration, and first batch of feature specs. Requires a passing admissions assessment.\n\n<example>\nuser: 'Design a development machine for my React app'\nassistant: 'I will delegate to dev-machine:machine-designer to run the founding session and design your machine.'\n<commentary>\nThe machine designer conducts a collaborative founding session, producing the architecture spec, module specs, and initial feature specs.\n</commentary>\n</example>"
+  description: "Use PROACTIVELY when designing an autonomous development machine after admissions passes. Runs the founding session to design architecture spec, module boundaries, state schema, recipe configuration, and first batch of feature specs. Requires a passing admissions assessment.\n\n<example>\nuser: 'Design a development machine for my React app'\nassistant: 'I will delegate to dev-machine:machine-designer to run the founding session and design your machine.'\n<commentary>\nThe machine designer conducts a collaborative founding session, producing the architecture spec, module specs, and initial feature specs.\n</commentary>\n</example>\n\n<example>\nuser: 'I passed admissions, now help me set up the machine architecture'\nassistant: 'I will delegate to dev-machine:machine-designer to design the machine architecture and create the initial specs.'\n<commentary>\nAfter admissions passes, machine-designer handles all architecture and spec creation work.\n</commentary>\n</example>"
 
 tools:
   - module: tool-filesystem
@@ -61,3 +61,5 @@ Your response must include:
 2. List of all files created
 3. Machine configuration variables collected
 4. Recommended next step (run `/generate-machine`)
+
+@foundation:context/shared/common-agent-base.md

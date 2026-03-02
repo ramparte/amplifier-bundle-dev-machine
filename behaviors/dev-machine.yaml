@@ -1,4 +1,8 @@
-# Dev Machine behavior -- mounts modes and tools
+bundle:
+  name: dev-machine-behavior
+  version: 0.1.0
+  description: Mounts the modes system for dev machine workflows
+
 hooks:
   - module: hooks-mode
     source: git+https://github.com/microsoft/amplifier-bundle-modes@main#subdirectory=modules/hooks-mode
@@ -11,9 +15,3 @@ tools:
     source: git+https://github.com/microsoft/amplifier-bundle-modes@main#subdirectory=modules/tool-mode
     config:
       gate_policy: "warn"
-  - module: tool-filesystem
-    source: git+https://github.com/microsoft/amplifier-module-tool-filesystem@main
-  - module: tool-search
-    source: git+https://github.com/microsoft/amplifier-module-tool-search@main
-  - module: tool-bash
-    source: git+https://github.com/microsoft/amplifier-module-tool-bash@main

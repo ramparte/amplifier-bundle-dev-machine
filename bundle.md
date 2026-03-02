@@ -8,18 +8,14 @@ bundle:
     Based on the proven pattern from word4 (278 features, 106 sessions, 5.5 days).
 
 includes:
-  - behavior: ./behaviors/dev-machine.yaml
+  - bundle: git+https://github.com/microsoft/amplifier-foundation@main
+  - bundle: dev-machine:behaviors/dev-machine
 
 agents:
   include:
-    - admissions-advisor
-    - machine-designer
-    - machine-generator
-
-context:
-  include:
-    - "@dev-machine:context/pattern.md"
-    - "@dev-machine:context/gate-criteria.md"
+    - dev-machine:admissions-advisor
+    - dev-machine:machine-designer
+    - dev-machine:machine-generator
 ---
 
 # Dev Machine Bundle
@@ -49,3 +45,4 @@ to degrade. The recipe orchestrator is lightweight -- it doesn't accumulate LLM 
 The "memory" lives in STATE.yaml and CONTEXT-TRANSFER.md.
 
 @dev-machine:context/pattern.md
+@dev-machine:context/gate-criteria.md

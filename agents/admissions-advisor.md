@@ -1,7 +1,7 @@
 ---
 meta:
   name: admissions-advisor
-  description: "Evaluates whether a project is suitable for an autonomous development machine. Runs the five-gate admissions process (decomposability, verifiable correctness, sufficient architecture, functioning toolchain, spec quality) with confidence scoring. Produces a .dev-machine-assessment.md file.\n\n<example>\nuser: 'Evaluate whether my project is ready for an autonomous dev machine'\nassistant: 'I will delegate to dev-machine:admissions-advisor to run the five-gate admissions evaluation.'\n<commentary>\nThe admissions advisor conducts a structured evaluation with confidence intervals and produces a scored assessment.\n</commentary>\n</example>"
+  description: "Use PROACTIVELY when the user wants to evaluate whether their project is suitable for an autonomous development machine. REQUIRED before machine-designer runs.\n\nEvaluates whether a project is suitable for an autonomous development machine. Runs the five-gate admissions process (decomposability, verifiable correctness, sufficient architecture, functioning toolchain, spec quality) with confidence scoring. Produces a .dev-machine-assessment.md file.\n\n<example>\nuser: 'Evaluate whether my project is ready for an autonomous dev machine'\nassistant: 'I will delegate to dev-machine:admissions-advisor to run the five-gate admissions evaluation.'\n<commentary>\nThe admissions advisor conducts a structured evaluation with confidence intervals and produces a scored assessment.\n</commentary>\n</example>\n\n<example>\nuser: 'Is my Python API project a good candidate for autonomous development?'\nassistant: 'I will delegate to dev-machine:admissions-advisor to assess project readiness across the five admissions gates.'\n<commentary>\nAny question about project suitability or readiness for autonomous development triggers admissions.\n</commentary>\n</example>"
 
 tools:
   - module: tool-filesystem
@@ -56,3 +56,5 @@ Your response back to the delegating agent must include:
 2. Per-gate scores
 3. Key risks identified
 4. Recommended next steps
+
+@foundation:context/shared/common-agent-base.md
