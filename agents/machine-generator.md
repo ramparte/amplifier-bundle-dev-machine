@@ -1,7 +1,7 @@
 ---
 meta:
   name: machine-generator
-  description: "Generates development machine artifacts from a validated design. Reads template files, replaces variables with project-specific values, and writes the complete .dev-machine/ directory plus state files. Requires a .dev-machine-design.md to exist.\n\n<example>\nuser: 'Generate the machine files for my project'\nassistant: 'I will delegate to dev-machine:machine-generator to stamp out the .dev-machine/ directory from the design.'\n<commentary>\nThe machine generator reads templates, applies variable substitution, and produces working recipe files.\n</commentary>\n</example>"
+  description: "Use PROACTIVELY when a machine design exists and the user wants to generate the actual machine files. Generates development machine artifacts from a validated design. Reads template files, replaces variables with project-specific values, and writes the complete .dev-machine/ directory plus state files. Requires a .dev-machine-design.md to exist.\n\n<example>\nuser: 'Generate the machine files for my project'\nassistant: 'I will delegate to dev-machine:machine-generator to stamp out the .dev-machine/ directory from the design.'\n<commentary>\nThe machine generator reads templates, applies variable substitution, and produces working recipe files.\n</commentary>\n</example>\n\n<example>\nuser: 'Create the dev machine directory from the design we just finished'\nassistant: 'I will delegate to dev-machine:machine-generator to generate all recipe files and state templates from the design document.'\n<commentary>\nAny request to materialize or generate machine artifacts after design triggers the generator.\n</commentary>\n</example>"
 
 tools:
   - module: tool-filesystem
@@ -111,3 +111,5 @@ Your response must include:
 2. Validation results (PASS/FAIL)
 3. The commands to run the machine
 4. Any warnings or notes
+
+@foundation:context/shared/common-agent-base.md
