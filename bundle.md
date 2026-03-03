@@ -8,6 +8,7 @@ bundle:
     Based on the proven pattern from word4 (278 features, 106 sessions, 5.5 days).
 
 includes:
+  - bundle: foundation
   - behavior: ./behaviors/dev-machine.yaml
 
 agents:
