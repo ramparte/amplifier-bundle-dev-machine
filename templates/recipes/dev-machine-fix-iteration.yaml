@@ -92,6 +92,17 @@ steps:
       - Do NOT refactor unless required to fix an error.
       - Be surgical -- minimal changes to resolve each error.
       - If you cannot fix an error, document it in SCRATCH.md as a known issue.
+
+      ## SAFETY CONSTRAINTS (MANDATORY -- NEVER VIOLATE)
+      - Your working directory is {{project_dir}}. Do NOT read, write, or execute commands on files outside this directory.
+      - FORBIDDEN commands: rm -rf, find -delete, any command targeting paths outside your working directory
+      - Do NOT cd to .., ~, /, or any path outside {{project_dir}}
+      - Do NOT access: ~/.ssh/, ~/.amplifier/keys.env, .env files, *.pem, *.key, or any credential files
+      - Do NOT run: git push, git remote add, or any command that sends code to a remote repository
+      - Do NOT start background processes with &, nohup, or disown unless the recipe infrastructure started them
+      - Do NOT install global packages (pip install without venv, npm install -g)
+      - If you need something outside these boundaries, add a blocker to {{state_file}} and STOP.
+      - VIOLATION OF THESE CONSTRAINTS MAY CAUSE DATA LOSS ACROSS THE ENTIRE DEVELOPMENT ENVIRONMENT.
     output: "fix_result"
     timeout: 1800
 

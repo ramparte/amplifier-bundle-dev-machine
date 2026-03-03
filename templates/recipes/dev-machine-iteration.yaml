@@ -6,7 +6,7 @@
 #   1. Reads STATE.yaml to orient (bash)
 #   2. Dispatches a fresh working session (agent)
 #   3. Runs build/type-check as a structural gate (bash)
-#   4. Reads STATE.yaml again to check for blockers (bash)
+#   4. Archives completed features + old sessions, checks health (bash)
 #
 # Returns structured JSON so the outer loop can update_context.
 #
@@ -34,11 +34,25 @@ steps:
           with open("{{state_file}}") as f:
               state = yaml.safe_load(f)
           blockers = state.get("blockers", [])
+          # Support factored state (completed_features list)
+          completed_list = set(state.get("completed_features", []))
+          features = state.get("features", {})
+          ready = in_progress = 0
+          for fid, fd in features.items():
+              s = fd.get("status", "")
+              if s == "ready":
+                  deps = fd.get("depends_on", [])
+                  if all(d in completed_list or features.get(d, {}).get("status") in ("completed", "done") for d in deps):
+                      ready += 1
+              elif s == "in-progress":
+                  in_progress += 1
           print(json.dumps({
               "phase": state.get("phase", 0),
               "phase_name": state.get("phase_name", "unknown"),
               "epoch": state.get("epoch", 0),
               "next_action": state.get("next_action", ""),
+              "ready_count": ready,
+              "completed_count": len(completed_list),
               "status": "blocked" if blockers else "healthy"
           }))
       except Exception as e:
@@ -80,11 +94,30 @@ steps:
         * Update {{state_file}} to mark it done with commit hash
       - Update {{context_file}} with decisions made and work completed
 
+      ## Important: Files are Factored (Do NOT Read Archives)
+
+      STATE.yaml and CONTEXT-TRANSFER.md are kept slim (~300 lines each).
+      - STATE.yaml: only active features. Completed features archived in FEATURE-ARCHIVE.yaml.
+      - CONTEXT-TRANSFER.md: only last 5 sessions. Older sessions archived in SESSION-ARCHIVE.md.
+      - Do NOT read FEATURE-ARCHIVE.yaml or SESSION-ARCHIVE.md -- they are append-only archives.
+      - The post-session step auto-archives completed features and old sessions.
+
       IF BLOCKED: add blocker to {{state_file}} blockers list, update {{context_file}}, stop.
       IF DEGRADATION DETECTED (repeating yourself, losing coherence): commit work, update state, stop.
 
       You are one session in a long chain. Persist everything to files.
       What you don't write down is lost forever.
+
+      ## SAFETY CONSTRAINTS (MANDATORY -- NEVER VIOLATE)
+      - Your working directory is {{project_dir}}. Do NOT read, write, or execute commands on files outside this directory.
+      - FORBIDDEN commands: rm -rf, find -delete, any command targeting paths outside your working directory
+      - Do NOT cd to .., ~, /, or any path outside {{project_dir}}
+      - Do NOT access: ~/.ssh/, ~/.amplifier/keys.env, .env files, *.pem, *.key, or any credential files
+      - Do NOT run: git push, git remote add, or any command that sends code to a remote repository
+      - Do NOT start background processes with &, nohup, or disown unless the recipe infrastructure started them
+      - Do NOT install global packages (pip install without venv, npm install -g)
+      - If you need something outside these boundaries, add a blocker to {{state_file}} and STOP.
+      - VIOLATION OF THESE CONSTRAINTS MAY CAUSE DATA LOSS ACROSS THE ENTIRE DEVELOPMENT ENVIRONMENT.
     output: "session_result"
     timeout: {{session_timeout}}
 
@@ -105,25 +138,92 @@ steps:
     output: "build_result"
     timeout: {{build_timeout}}
 
-  # Step 4: Post-session -- re-read STATE.yaml to check health
+  # Step 4: Post-session -- archive completed features + old sessions, check health
   - id: "post-session"
     type: "bash"
     command: |
       python3 << 'PYEOF'
-      import json, yaml
+      import json, yaml, re, os
+      from datetime import datetime, timezone
+
       try:
           with open("{{state_file}}") as f:
               state = yaml.safe_load(f)
-          blockers = state.get("blockers", [])
+
           session_num = int("{{session_count}}") + 1
+
+          # --- Archive completed features (if using completed_features list pattern) ---
+          features = state.get("features", {})
+          completed_list = state.get("completed_features", [])
+          if isinstance(completed_list, list):
+              newly_completed = {fid: fd for fid, fd in features.items() if fd.get("status") in ("completed", "done")}
+              if newly_completed:
+                  archive_path = os.path.join(os.path.dirname("{{state_file}}") or ".", "FEATURE-ARCHIVE.yaml")
+                  try:
+                      with open(archive_path) as f:
+                          archive = yaml.safe_load(f) or {}
+                  except FileNotFoundError:
+                      archive = {"description": "Completed feature archive. Append-only.", "features": {}}
+                  arch_feats = archive.get("features", {})
+                  for fid, fd in newly_completed.items():
+                      if fid not in completed_list:
+                          completed_list.append(fid)
+                      arch_feats[fid] = fd
+                      del features[fid]
+                  archive["features"] = arch_feats
+                  state["completed_features"] = completed_list
+                  state["features"] = features
+                  with open(archive_path, "w") as f:
+                      yaml.dump(archive, f, default_flow_style=False, sort_keys=False, width=120)
+
+          # --- Archive old session summaries from context-transfer (keep last 5) ---
+          KEEP_SESSIONS = 5
+          ctx_path = "{{context_file}}"
+          session_archive = os.path.join(os.path.dirname(ctx_path) or ".", "SESSION-ARCHIVE.md")
+          if os.path.exists(ctx_path):
+              with open(ctx_path) as f:
+                  ctx = f.read()
+              sess = list(re.finditer(r'^### Session \d+ Summary', ctx, re.MULTILINE))
+              if len(sess) > KEEP_SESSIONS:
+                  header = ctx[:sess[0].start()]
+                  keep_from = sess[-KEEP_SESSIONS]
+                  to_archive = ctx[sess[0].start():keep_from.start()]
+                  keep = ctx[keep_from.start():]
+                  if to_archive.strip():
+                      existing = ""
+                      if os.path.exists(session_archive):
+                          with open(session_archive) as f:
+                              existing = f.read()
+                      if not existing:
+                          existing = "# Session Archive\n\n> Archived session summaries. Append-only.\n\n"
+                      if to_archive[:50] not in existing:
+                          with open(session_archive, "a") as f:
+                              f.write(to_archive)
+                  with open(ctx_path, "w") as f:
+                      f.write(header)
+                      f.write(f"> **Note**: Older sessions archived in SESSION-ARCHIVE.md.\n")
+                      f.write(f"> Only the last {KEEP_SESSIONS} sessions kept here.\n\n")
+                      f.write(keep)
+
+          # --- Update epoch and check health ---
+          state["epoch"] = state.get("epoch", 0) + 1
+          state["last_session"] = datetime.now(timezone.utc).isoformat()
+          blockers = state.get("blockers", [])
+
+          with open("{{state_file}}", "w") as f:
+              yaml.dump(state, f, default_flow_style=False, sort_keys=False, width=120)
+
+          remaining = sum(1 for f in features.values() if f.get("status") not in ("completed", "done"))
+          status = "blocked" if blockers else ("complete" if remaining == 0 else "healthy")
+
           print(json.dumps({
-              "status": "blocked" if blockers else "healthy",
+              "status": status,
               "session_count": str(session_num),
               "next_action": state.get("next_action", ""),
               "total_features": state.get("meta", {}).get("total_features_completed", 0)
           }))
       except Exception as e:
-          print(json.dumps({"status": "blocked", "session_count": "{{session_count}}"}))
+          print(json.dumps({"status": "blocked", "session_count": "{{session_count}}", "error": str(e)}))
       PYEOF
     output: "iteration_result"
     parse_json: true

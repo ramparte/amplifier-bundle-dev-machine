@@ -155,3 +155,20 @@ When stopping:
 - Don't batch state updates to the end
 - Don't assume context from a "previous conversation" -- you have none
 - Don't modify specs without authorization
+
+## Factored File Structure
+
+Both STATE.yaml and CONTEXT-TRANSFER.md are kept slim by automatic archiving.
+The post-session step handles this -- you do NOT need to manage archives yourself.
+
+**STATE.yaml** (~300 lines, active state only):
+- If the project uses `completed_features` list pattern, completed features are
+  auto-archived to FEATURE-ARCHIVE.yaml by the post-session step.
+- Only active (ready/in_progress) features stay in STATE.yaml.
+
+**CONTEXT-TRANSFER.md** (~300 lines, recent context only):
+- Only the last 5 session summaries are kept.
+- Older sessions are auto-archived to SESSION-ARCHIVE.md.
+
+**Do NOT read or edit**: FEATURE-ARCHIVE.yaml, SESSION-ARCHIVE.md (append-only archives).
+These exist only for historical reference and disaster recovery.

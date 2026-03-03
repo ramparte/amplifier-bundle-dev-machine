@@ -34,6 +34,37 @@ recursion:
 
 steps:
   # ---------------------------------------------------------------------------
+  # Step 0: Container safety check -- refuse to run on bare host
+  # ---------------------------------------------------------------------------
+  - id: "container-check"
+    type: "bash"
+    command: |
+      # Check if running inside a container
+      if [ ! -f /.dockerenv ] && [ ! -f /run/.containerenv ]; then
+          echo "=========================================="
+          echo "ERROR: DEV MACHINE NOT RUNNING IN CONTAINER"
+          echo "=========================================="
+          echo ""
+          echo "Running dev-machine recipes outside a container is DANGEROUS."
+          echo "Autonomous agents have unrestricted filesystem access and can"
+          echo "damage files outside the project directory."
+          echo ""
+          echo "Use: ./run-dev-machine.sh"
+          echo "Or:  docker compose run --rm dev-machine"
+          echo ""
+          echo "To bypass this check (NOT RECOMMENDED):"
+          echo "  export DEV_MACHINE_ALLOW_HOST=1"
+          echo "=========================================="
+          if [ -z "${DEV_MACHINE_ALLOW_HOST:-}" ]; then
+              exit 1
+          fi
+          echo "WARNING: DEV_MACHINE_ALLOW_HOST is set. Proceeding on bare host."
+          echo "YOU ACCEPT ALL RISKS OF FILESYSTEM DAMAGE."
+      fi
+      echo "Container check passed."
+    on_error: "fail"
+
+  # ---------------------------------------------------------------------------
   # Step 1: Initial health check -- run build + test, write SCRATCH.md
   # ---------------------------------------------------------------------------
   - id: "initial-check"

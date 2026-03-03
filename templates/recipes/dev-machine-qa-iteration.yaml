@@ -92,6 +92,17 @@ steps:
       - You've tested the current area and either it passes or you've fixed it
       - You encounter a blocker you can't resolve -- add it to blockers in {{qa_state_file}}
       - Stop gracefully -- the outer recipe will continue with the next area
+
+      ## SAFETY CONSTRAINTS (MANDATORY -- NEVER VIOLATE)
+      - Your working directory is {{project_dir}}. Do NOT read, write, or execute commands on files outside this directory.
+      - FORBIDDEN commands: rm -rf, find -delete, any command targeting paths outside your working directory
+      - Do NOT cd to .., ~, /, or any path outside {{project_dir}}
+      - Do NOT access: ~/.ssh/, ~/.amplifier/keys.env, .env files, *.pem, *.key, or any credential files
+      - Do NOT run: git push, git remote add, or any command that sends code to a remote repository
+      - Do NOT start background processes with &, nohup, or disown unless the recipe infrastructure started them
+      - Do NOT install global packages (pip install without venv, npm install -g)
+      - If you need something outside these boundaries, add a blocker to {{qa_state_file}} and STOP.
+      - VIOLATION OF THESE CONSTRAINTS MAY CAUSE DATA LOSS ACROSS THE ENTIRE DEVELOPMENT ENVIRONMENT.
     output: "session_result"
     timeout: 1800
 
