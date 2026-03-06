@@ -64,6 +64,7 @@ refuse to proceed if any are missing.
 - `STATE.yaml` -- machine-readable project state (from `templates/STATE.yaml`)
 - `CONTEXT-TRANSFER.md` -- session handoff document (from `templates/CONTEXT-TRANSFER.md`)
 - `SCRATCH.md` -- ephemeral working memory (from `templates/SCRATCH.md`)
+- `AGENTS.md` -- default session instructions (from `templates/AGENTS.md`) -- **always generated**
 
 ### Protocol Files (in `.dev-machine/`)
 - `working-session-instructions.md` -- session protocol (from `templates/working-session-instructions.md`)

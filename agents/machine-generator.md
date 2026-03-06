@@ -34,6 +34,7 @@ Read templates from the bundle's templates directory:
 - `@dev-machine:templates/STATE.yaml`
 - `@dev-machine:templates/CONTEXT-TRANSFER.md`
 - `@dev-machine:templates/SCRATCH.md`
+- `@dev-machine:templates/AGENTS.md`
 - `@dev-machine:templates/working-session-instructions.md`
 - `@dev-machine:templates/feature-spec-template.md`
 
@@ -58,6 +59,7 @@ Read templates from the bundle's templates directory:
 | `STATE.yaml` | `./STATE.yaml` |
 | `CONTEXT-TRANSFER.md` | `./CONTEXT-TRANSFER.md` |
 | `SCRATCH.md` | `./SCRATCH.md` |
+| `AGENTS.md` | `./AGENTS.md` |
 | `working-session-instructions.md` | `.dev-machine/working-session-instructions.md` |
 | `feature-spec-template.md` | `.dev-machine/feature-spec-template.md` |
 
@@ -85,7 +87,7 @@ for f in glob.glob(".dev-machine/*.yaml"):
         errors.append(f"YAML parse error in {f}: {e}")
 
 # Check for unsubstituted variables
-for f in glob.glob(".dev-machine/*") + ["STATE.yaml", "CONTEXT-TRANSFER.md", "SCRATCH.md"]:
+for f in glob.glob(".dev-machine/*") + ["STATE.yaml", "CONTEXT-TRANSFER.md", "SCRATCH.md", "AGENTS.md"]:
     try:
         with open(f) as fh:
             content = fh.read()

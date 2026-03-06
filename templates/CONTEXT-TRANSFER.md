@@ -1,5 +1,9 @@
 # {{project_name}} -- Context Transfer
 
+> **This project is managed by an autonomous development machine.**
+> Do NOT implement features or fix code directly. Run the recipes instead.
+> See `AGENTS.md` for instructions.
+
 > This file is the institutional memory of the project. Updated continuously.
 > Each session reads this to understand recent decisions and context.
 > Reverse-chronological: newest entries at the top.

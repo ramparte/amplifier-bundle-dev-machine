@@ -4,6 +4,11 @@
 # This file is the single source of truth for project status.
 # Updated at every state transition. Any fresh session reads this to orient.
 #
+# WARNING: This project is managed by an autonomous development machine.
+# Do NOT implement features or fix code directly. Run the recipes instead:
+#   amplifier recipe execute .dev-machine/build.yaml
+# See AGENTS.md for full instructions.
+#
 # Rules:
 # - Update after EVERY feature (not batched)
 # - Never two features without a state update between them

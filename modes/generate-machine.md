@@ -76,12 +76,13 @@ From templates, generate:
 - `.dev-machine/working-session-instructions.md` (from `working-session-instructions.md`)
 - `.dev-machine/feature-spec-template.md` (from `feature-spec-template.md`)
 
-### Step 5: Generate State Files
+### Step 5: Generate State and Session Files
 
 At the project root, generate:
 - `STATE.yaml` (from `templates/STATE.yaml`)
 - `CONTEXT-TRANSFER.md` (from `templates/CONTEXT-TRANSFER.md`)
 - `SCRATCH.md` (from `templates/SCRATCH.md`)
+- `AGENTS.md` (from `templates/AGENTS.md`) -- **always generated, ensures any AI session opened in this repo knows to run recipes instead of working directly**
 
 For `{{timestamp}}`, use the current ISO 8601 timestamp.
 
@@ -101,7 +102,7 @@ echo "=== Generated Machine Files ==="
 find .dev-machine -type f | sort
 echo ""
 echo "=== State Files ==="
-ls -la STATE.yaml CONTEXT-TRANSFER.md SCRATCH.md 2>/dev/null
+ls -la STATE.yaml CONTEXT-TRANSFER.md SCRATCH.md AGENTS.md 2>/dev/null
 echo ""
 echo "=== Recipe Validation ==="
 python3 -c "import yaml; [yaml.safe_load(open(f'.dev-machine/{r}')) for r in ['build.yaml','iteration.yaml','health-check.yaml','fix-iteration.yaml']]; print('All recipes parse as valid YAML')"
