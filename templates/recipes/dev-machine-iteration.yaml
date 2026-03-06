@@ -61,6 +61,67 @@ steps:
     output: "orient_state"
     parse_json: true
 
+
+  # Step 1.5: Module health check -- flag oversized packages before working session
+  #
+  # Content-aware bypass: if next_action already mentions an oversized module by
+  # name, the machine has a plan for it (e.g. a refactoring epoch). In that case
+  # we warn but do NOT write a blocker. Only genuinely *unplanned* oversized
+  # modules trigger a hard block.
+  #
+  # This prevents the "blocker-rewrite loop" where the health check keeps
+  # re-blocking modules that the machine is actively decomposing.
+  - id: "module-health-check"
+    type: "bash"
+    command: |
+      cd {{project_dir}}
+      echo "=== MODULE HEALTH CHECK ==="
+      THRESHOLD={{module_size_threshold}}
+      OVERSIZED=""
+      # Scan all packages with src/ directories
+      for pkg in packages/*/; do
+        name=$(basename "$pkg")
+        if [ -d "$pkg/src" ]; then
+          loc=$(find "$pkg/src" -name "*.ts" -o -name "*.tsx" -o -name "*.py" -o -name "*.rs" | xargs wc -l 2>/dev/null | tail -1 | awk '{print $1}')
+          if [ "$loc" -gt "$THRESHOLD" ]; then
+            OVERSIZED="$OVERSIZED $name($loc)"
+          fi
+        fi
+      done
+      if [ -n "$OVERSIZED" ]; then
+        echo "OVERSIZED PACKAGES:$OVERSIZED"
+        # Content-aware bypass: only block modules NOT mentioned in next_action.
+        # If next_action already names the module, the machine knows about it.
+        UNPLANNED=$(python3 << 'PYCHECK'
+      import yaml
+      with open("{{state_file}}") as f:
+          state = yaml.safe_load(f)
+      next_action = state.get("next_action", "")
+      oversized = "$OVERSIZED"
+      unplanned = []
+      for token in oversized.split():
+          pkg_name = token.split("(")[0].strip()
+          if pkg_name and pkg_name not in next_action:
+              unplanned.append(token)
+      print(" ".join(unplanned))
+      PYCHECK
+        )
+        if [ -z "$UNPLANNED" ]; then
+          echo "All oversized modules acknowledged in next_action -- warn only."
+          echo '{"health": "warn-oversized", "oversized": "'"$OVERSIZED"'", "planned": true}'
+        else
+          echo "Unplanned oversized modules: $UNPLANNED -- blocking."
+          python3 -c "import yaml,datetime;f=open('{{state_file}}');s=yaml.safe_load(f);f.close();b=s.get('blockers') or [];b.append({'description':'Module size threshold exceeded:$UNPLANNED -- refactoring epoch needed','since':datetime.datetime.now().isoformat(),'severity':'high'});s['blockers']=b;f=open('{{state_file}}','w');yaml.dump(s,f,default_flow_style=False,sort_keys=False);f.close()"
+          echo '{"health": "needs-refactoring", "oversized": "'"$UNPLANNED"'"}'
+        fi
+      else
+        echo "All packages within size limits."
+        echo '{"health": "ok"}'
+      fi
+    output: "health_result"
+    parse_json: true
+    on_error: continue
+
   # Step 2: Dispatch fresh working session
   - id: "working-session"
     agent: "self"

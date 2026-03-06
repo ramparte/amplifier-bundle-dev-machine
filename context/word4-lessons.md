@@ -84,3 +84,9 @@ For a well-suited problem with 200+ features:
 - Occasional blockers requiring human judgment (1-2 per day)
 - Health check runs needed every 10-20 sessions
 - Feature specs written in batches of 5-15 every few phases
+### 7. Content-Aware Health Checks (the blocker-rewrite loop)
+- Module health check must NOT blindly re-block modules the machine is already working on
+- **Anti-pattern:** Health check writes blocker for oversized module -> next session's pre-flight gate sees blocker -> exits -> entrypoint treats as crash -> backoff. Repeat forever.
+- **Root cause in word4:** The bypass tried to look up a specific feature ID (`F-901`) at the wrong YAML path (`state['features']` instead of `run_to_conclusion.phase_b.items[]`), with the wrong key name, and the wrong status value. Three compounding bugs meant the bypass never fired.
+- **Fix:** Content-aware bypass. Instead of looking up specific feature IDs (fragile, breaks when STATE.yaml structure evolves), check whether `next_action` already mentions the oversized module by name. If it does, the machine has a plan -- warn, don't block. Only block on *genuinely unplanned* oversized modules.
+- **Principle:** Health checks should respect the machine's own planning. If the machine already knows about a problem and has instructions to address it, the health check should not override that decision.
