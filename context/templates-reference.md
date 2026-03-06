@@ -41,6 +41,15 @@ refuse to proceed if any are missing.
 | `commit_prefix` | Conventional commit scope prefix | `feat` |
 | `error_pattern` | Regex for build error detection | depends on language |
 
+| `container_name` | Docker container name for the dev machine | `myproject-dev-machine` |
+| `image_name` | Docker image name (tagged on build) | `myproject-dev-machine:latest` |
+| `bundle_dir` | Absolute path to the amplifier-bundle-dev-machine checkout | `/home/user/dev/amplifier-bundle-dev-machine` |
+| `user_uid` | Host user UID (for Docker build arg USER_UID) | `1000` |
+| `user_gid` | Host user GID (for Docker build arg USER_GID) | `1000` |
+| `cf_backoff` | Cloudflare backoff seconds (entrypoint) | `900` |
+| `cf_backoff_max` | Max CF preflight exponential backoff ceiling (seconds) | `2700` |
+| `inter_session_cooldown` | Pause between successful sessions in seconds | `60` |
+
 ## Template Files
 
 ### Recipes (in `.dev-machine/`)
@@ -59,6 +68,14 @@ refuse to proceed if any are missing.
 ### Protocol Files (in `.dev-machine/`)
 - `working-session-instructions.md` -- session protocol (from `templates/working-session-instructions.md`)
 - `feature-spec-template.md` -- template for writing feature specs (from `templates/feature-spec-template.md`)
+
+### Infrastructure Scripts (in project root or moved to `scripts/`)
+- `scripts/entrypoint.sh` -- container entrypoint with CF-aware retry loop (from `templates/scripts/entrypoint.sh`)
+- `scripts/dev-machine-watchdog.sh` -- host-side health watchdog with heartbeat-aware restart logic (from `templates/scripts/dev-machine-watchdog.sh`)
+- `scripts/dev-machine-monitor.sh` -- diagnostic monitor with 5 failure-pattern detections (from `templates/scripts/dev-machine-monitor.sh`)
+
+### Infrastructure Config (in project root)
+- `docker-compose.dev-machine.yaml` -- Docker Compose config with host networking and volume structure (from `templates/docker-compose.dev-machine.yaml`)
 
 ## How Generation Works
 
