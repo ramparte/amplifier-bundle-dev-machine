@@ -90,3 +90,85 @@ For a well-suited problem with 200+ features:
 - **Root cause in word4:** The bypass tried to look up a specific feature ID (`F-901`) at the wrong YAML path (`state['features']` instead of `run_to_conclusion.phase_b.items[]`), with the wrong key name, and the wrong status value. Three compounding bugs meant the bypass never fired.
 - **Fix:** Content-aware bypass. Instead of looking up specific feature IDs (fragile, breaks when STATE.yaml structure evolves), check whether `next_action` already mentions the oversized module by name. If it does, the machine has a plan -- warn, don't block. Only block on *genuinely unplanned* oversized modules.
 - **Principle:** Health checks should respect the machine's own planning. If the machine already knows about a problem and has instructions to address it, the health check should not override that decision.
+
+## Infrastructure Robustness (The Three-Layer Stack)
+
+### The Three-Layer Recovery Stack
+
+Every robust dev machine needs three independent recovery layers. Each addresses a different failure class. Missing ANY layer creates a fragility gap that will eventually cause overnight failures.
+
+| Layer | Runs | Frequency | What It Handles |
+|-------|------|-----------|-----------------|
+| **Entrypoint retry loop** | Inside container | Continuous | API blips, CF challenges, recipe crashes. Container never exits permanently. |
+| **Watchdog** | Host cron | Every 15 min | Container crashes, OOM, host reboots. Restarts dead containers. |
+| **Monitor** | Host cron | Every 10 min | Operational drift: stale blockers, unpushed commits, permission issues, orphaned work. |
+
+### The Heartbeat Coordination Pattern
+
+The **heartbeat file** (`.dev-machine-heartbeat`) is the critical coordination mechanism between layers:
+
+1. The entrypoint touches the heartbeat file before every significant sleep (CF backoff, inter-session cooldown)
+2. The watchdog checks heartbeat age before restarting:
+   - Heartbeat fresh (<60 min) + 0% CPU = entrypoint is alive in CF backoff. DO NOT restart.
+   - Heartbeat stale (>60 min) + 0% CPU = entrypoint is truly dead. Restart.
+3. Without this coordination, the watchdog restarts containers during CF backoff, creating an infinite restart loop that makes CF blocks WORSE.
+
+**This is non-obvious and critical.** Every new machine must have it.
+
+### The Failure-to-Mechanism Map
+
+Every robustness mechanism in word4 traces to a specific observed failure:
+
+| Observed Failure | Mechanism Added |
+|------------------|-----------------|
+| Cloudflare blocking API during long runs | Pre-flight check, CF backoff tiers, mid-session scan, `network_mode: host` |
+| Recipe exit 0 but silently failing (514-attempt incident) | Stdout inspection for "Recipe execution failed", treat as error |
+| Watchdog restarting during CF backoff | Heartbeat file + watchdog heartbeat-age check |
+| Root-owned files blocking host cron/monitors | Non-root container user + permission self-healing in monitor |
+| Stale blockers trapping machine when build passes | Monitor auto-verifies and clears build blockers |
+| Unpushed commits piling up (SSH agent death) | Monitor auto-push at >10 commits threshold |
+| Orphaned work when container dies mid-feature | Monitor auto-commits dirty tree before restart |
+| Agent implementing outside recipe (session drift) | AGENTS.md guardrails + container-check in recipes |
+| `set -euo pipefail` in monitor killing it silently | Explicit per-command error handling (never set -e in monitors) |
+| Container bridge NAT triggering CF bot detection | `network_mode: host` (uses real IP/fingerprint) |
+
+### Robustness Verification Checklist
+
+Before considering a generated machine production-ready, verify ALL of:
+
+**Container layer:**
+- [ ] Entrypoint has infinite retry loop (not bare `exec`)
+- [ ] CF preflight check before each recipe attempt
+- [ ] Heartbeat file touched before every sleep
+- [ ] Silent failure detection (stdout scan for "Recipe execution failed")
+- [ ] `restart: unless-stopped` in docker-compose
+- [ ] `network_mode: host` in docker-compose
+- [ ] Non-root user in Dockerfile (matching host UID/GID)
+
+**Host monitoring layer:**
+- [ ] Watchdog runs via cron every 15 min
+- [ ] Watchdog is heartbeat-aware (won't restart during CF backoff)
+- [ ] Monitor runs via cron every 10 min
+- [ ] Monitor has permission self-healing
+- [ ] Monitor has auto-commit for orphaned work
+- [ ] Monitor has STATE.yaml awareness
+- [ ] Monitor does NOT use `set -euo pipefail`
+
+**Operational layer:**
+- [ ] SSH agent socket forwarded to container (push capability)
+- [ ] Named volume for `~/.amplifier` (not shared with host)
+- [ ] Security hardening: `cap_drop: ALL`, `no-new-privileges`
+- [ ] Git configured with safe.directory and dev-machine identity
+- [ ] Build gate runs after every working session
+
+### The "Scar Tissue" Principle
+
+New machines MUST inherit ALL three layers. The temptation is to start simple ("we'll add monitoring later"). This always fails because:
+
+1. The first overnight run without monitoring produces a subtle failure
+2. The failure is only discovered the next morning
+3. A monitor is hastily added, but without the heartbeat coordination
+4. The hasty monitor conflicts with the entrypoint's backoff strategy
+5. More failures ensue until the full three-layer stack is rebuilt
+
+**Start with the full stack. You cannot incrementally arrive at robustness.**

@@ -102,11 +102,8 @@ if [ -f "$AMPLIFIER_DIR/keys.env" ]; then
     set +a
 fi
 
-# -- Install pnpm dependencies if needed --------------------------------------
-if [ -f package.json ] && [ ! -d node_modules/vite ]; then
-    echo "Installing pnpm dependencies..."
-    pnpm install --frozen-lockfile 2>/dev/null || pnpm install
-fi
+# -- Install project dependencies if needed ------------------------------------
+{{install_deps_block}}
 
 # -- Run command with retry loop ----------------------------------------------
 backoff=$INITIAL_BACKOFF

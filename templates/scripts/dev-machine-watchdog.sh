@@ -14,8 +14,6 @@
 #   - Restarts SSH agent if socket is dead
 #   - Logs everything to dev-machine-watchdog.log
 # =============================================================================
-set -euo pipefail
-
 PROJECT_DIR="{{project_dir}}"
 COMPOSE_FILE="$PROJECT_DIR/docker-compose.dev-machine.yaml"
 LOG_FILE="$PROJECT_DIR/dev-machine-watchdog.log"
@@ -137,7 +135,12 @@ fi
 
 # ── 4. Log summary stats ──────────────────────────────────────────────────────
 MEM=$(docker stats --no-stream --format '{{.MemUsage}}' {{container_name}} 2>/dev/null || echo "unknown")
-UNPUSHED=$(git rev-list --count origin/master..HEAD 2>/dev/null || echo "?")
+UPSTREAM=$(git rev-parse --abbrev-ref '@{u}' 2>/dev/null || echo "")
+if [ -n "$UPSTREAM" ]; then
+    UNPUSHED=$(git rev-list --count "$UPSTREAM"..HEAD 2>/dev/null || echo "?")
+else
+    UNPUSHED="?(no upstream)"
+fi
 log "Stats: CPU=${CPU:-?}%, MEM=$MEM, unpushed=$UNPUSHED, HEAD=$CURRENT_HEAD"
 
 log "--- watchdog check end ---"

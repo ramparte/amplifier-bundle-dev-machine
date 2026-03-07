@@ -49,6 +49,15 @@ refuse to proceed if any are missing.
 | `cf_backoff` | Cloudflare backoff seconds (entrypoint) | `900` |
 | `cf_backoff_max` | Max CF preflight exponential backoff ceiling (seconds) | `2700` |
 | `inter_session_cooldown` | Pause between successful sessions in seconds | `60` |
+| `base_image` | Docker base image | `python:3.12-slim` |
+| `uv_version` | Pinned uv version | `0.10.4` |
+| `user_home` | Container user home directory (must match host) | `/home/$USER` |
+| `system_packages` | Additional apt packages | none |
+| `node_setup` | Node.js installation commands (empty if not needed) | none |
+| `python_dev_tools` | Python dev tool installs (ruff, pyright) | none |
+| `extra_pip_packages` | Additional system pip packages | none |
+| `install_deps_block` | Shell block for project dependency installation | none |
+| `install_command` | Single-line install command for entrypoint | none |
 
 ## Template Files
 

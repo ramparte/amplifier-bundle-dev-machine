@@ -76,7 +76,28 @@ From templates, generate:
 - `.dev-machine/working-session-instructions.md` (from `working-session-instructions.md`)
 - `.dev-machine/feature-spec-template.md` (from `feature-spec-template.md`)
 
-### Step 5: Generate State and Session Files
+### Step 5: Generate Infrastructure Scripts
+
+From templates, generate into the project:
+
+**Scripts** (into `.dev-machine/scripts/` or project root `scripts/`):
+- `entrypoint.sh` (from `templates/scripts/entrypoint.sh`) — **make executable** (`chmod +x`)
+- `dev-machine-watchdog.sh` (from `templates/scripts/dev-machine-watchdog.sh`) — **make executable**
+- `dev-machine-monitor.sh` (from `templates/scripts/dev-machine-monitor.sh`) — **make executable**
+
+**Docker config** (into project root):
+- `dev-machine.Dockerfile` (from `templates/dev-machine.Dockerfile`)
+- `docker-compose.dev-machine.yaml` (from `templates/docker-compose.dev-machine.yaml`)
+
+For each file:
+1. Read the template
+2. Replace all `{{variable}}` placeholders with values from the design
+3. Write the result
+4. For `.sh` files, run `chmod +x` on the output
+
+**Important**: Docker format strings like `{{.State.Status}}`, `{{.CPUPerc}}`, `{{.MemUsage}}` are Go templates used by Docker, NOT machine template variables. Do NOT replace these — they must remain as-is in the generated files. Only replace variables that match known machine template variables (listed in templates-reference.md).
+
+### Step 6: Generate State and Session Files
 
 At the project root, generate:
 - `STATE.yaml` (from `templates/STATE.yaml`)
@@ -86,7 +107,7 @@ At the project root, generate:
 
 For `{{timestamp}}`, use the current ISO 8601 timestamp.
 
-### Step 6: Populate STATE.yaml
+### Step 7: Populate STATE.yaml
 
 Read the architecture spec and feature specs created during machine design.
 Update STATE.yaml with:
@@ -95,7 +116,7 @@ Update STATE.yaml with:
 - Feature specs from the first batch (with `status: "ready"`)
 - `next_action` pointing to the first piece of work
 
-### Step 7: Verify Generation
+### Step 8: Verify Generation
 
 ```bash
 echo "=== Generated Machine Files ==="
@@ -106,9 +127,35 @@ ls -la STATE.yaml CONTEXT-TRANSFER.md SCRATCH.md AGENTS.md 2>/dev/null
 echo ""
 echo "=== Recipe Validation ==="
 python3 -c "import yaml; [yaml.safe_load(open(f'.dev-machine/{r}')) for r in ['build.yaml','iteration.yaml','health-check.yaml','fix-iteration.yaml']]; print('All recipes parse as valid YAML')"
+echo ""
+echo "=== Infrastructure Files ==="
+ls -la dev-machine.Dockerfile docker-compose.dev-machine.yaml 2>/dev/null
+ls -la scripts/entrypoint.sh scripts/dev-machine-watchdog.sh scripts/dev-machine-monitor.sh 2>/dev/null
+echo ""
+echo "=== Script Permissions ==="
+stat -c '%a %n' scripts/*.sh 2>/dev/null
 ```
 
-### Step 8: Report to User
+### Step 9: Print Cron and Startup Instructions
+
+After reporting generated files, print the cron setup commands:
+
+```bash
+echo ""
+echo "=== Cron Setup (run these on the HOST, not in the container) ==="
+echo ""
+echo "# Add to crontab (crontab -e):"
+echo "*/15 * * * * {{project_dir}}/scripts/dev-machine-watchdog.sh >> {{project_dir}}/dev-machine-watchdog.log 2>&1"
+echo "*/10 * * * * {{project_dir}}/scripts/dev-machine-monitor.sh >> {{project_dir}}/dev-machine-monitor.log 2>&1"
+echo ""
+echo "=== Start the Machine ==="
+echo "cd {{project_dir}} && docker compose -f docker-compose.dev-machine.yaml up -d --build"
+echo ""
+echo "=== Then start the build recipe ==="
+echo "amplifier recipe execute .dev-machine/build.yaml"
+```
+
+### Step 10: Report to User
 
 Present:
 1. All files generated with paths
@@ -116,6 +163,9 @@ Present:
 3. The command to run health checks: `amplifier recipe execute .dev-machine/health-check.yaml`
 4. If QA enabled: `amplifier recipe execute .dev-machine/qa.yaml`
 5. Remind them they can modify the generated files -- they belong to the project now
+6. Infrastructure files generated (Dockerfile, compose, scripts)
+7. Cron setup commands to copy-paste
+8. `docker compose -f docker-compose.dev-machine.yaml up -d --build` to start
 
 Call `mode(operation="clear")` when done.
 
