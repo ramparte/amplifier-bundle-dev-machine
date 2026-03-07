@@ -63,6 +63,7 @@ FROM {{base_image}}
 # {{system_packages}} — project-specific extras; placed inline to avoid an
 #                       orphaned backslash when the variable is empty
 RUN apt-get update && apt-get install -y --no-install-recommends \
+        openssh-client \
         git \
         curl \
         ca-certificates \
@@ -131,9 +132,13 @@ RUN uv tool install amplifier --from "git+https://github.com/microsoft/amplifier
 # -- Git identity for container commits ----------------------------------------
 # safe.directory allows git to operate on the bind-mounted project dir
 # (owned by host UID, which matches container UID).
+# URL rewrite: the container has SSH agent forwarding but no HTTPS credential
+# helper, so all github.com HTTPS URLs are rewritten to SSH.  This ensures
+# `amplifier` bundle/module clones use the forwarded SSH key transparently.
 RUN git config --global user.name "{{project_name}} Dev Machine" && \
     git config --global user.email "dev-machine@{{project_name}}.local" && \
-    git config --global --add safe.directory {{project_dir}}
+    git config --global --add safe.directory {{project_dir}} && \
+    git config --global url."git@github.com:".insteadOf "https://github.com/"
 
 # -- SSH directory for known_hosts bind-mount ----------------------------------
 RUN mkdir -p {{user_home}}/.ssh && chmod 700 {{user_home}}/.ssh
