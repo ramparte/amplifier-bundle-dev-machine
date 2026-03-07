@@ -106,3 +106,51 @@ COPY --from=ghcr.io/astral-sh/uv:{{uv_version}} /uv /uvx /usr/local/bin/
 ARG USER_UID={{user_uid}}
 ARG USER_GID={{user_gid}}
 
+# Idempotent: -f skips if group/user already exists (e.g. node base images
+# that ship UID 1000 as 'node').  The || true handles both the -f flag
+# (which isn't universal across addgroup/adduser implementations) and the
+# case where the UID is already claimed under a different name.
+RUN groupadd -f -g ${USER_GID} {{username}} 2>/dev/null || true \
+    && id -u {{username}} >/dev/null 2>&1 \
+    || useradd -m -u ${USER_UID} -g ${USER_GID} -s /bin/bash \
+         -d {{user_home}} {{username}}
+
+# -- Install Amplifier as the non-root user ------------------------------------
+# Installing as root leaves shebangs pointing at /root/.local/... which breaks
+# after the USER switch.  We install as {{username}} so uv puts binaries in
+# {{user_home}}/.local/bin/ with correct shebangs.
+USER {{username}}
+ENV PATH="{{user_home}}/.local/bin:${PATH}"
+
+RUN uv tool install amplifier --from "git+https://github.com/microsoft/amplifier"
+
+# -- Python dev tools (optional) -----------------------------------------------
+# ruff, pyright, pytest, etc.  Leave {{python_dev_tools}} empty to skip.
+{{python_dev_tools}}
+
+# -- Git identity for container commits ----------------------------------------
+# safe.directory allows git to operate on the bind-mounted project dir
+# (owned by host UID, which matches container UID).
+RUN git config --global user.name "{{project_name}} Dev Machine" && \
+    git config --global user.email "dev-machine@{{project_name}}.local" && \
+    git config --global --add safe.directory {{project_dir}}
+
+# -- SSH directory for known_hosts bind-mount ----------------------------------
+RUN mkdir -p {{user_home}}/.ssh && chmod 700 {{user_home}}/.ssh
+
+# -- Pre-create .amplifier dir for named volume --------------------------------
+# Docker named volumes inherit ownership from the container's directory at
+# first mount.  If .amplifier doesn't exist, the volume is created as root.
+# Creating it here ensures the named volume starts with correct ownership.
+RUN mkdir -p {{user_home}}/.amplifier
+
+# -- Entrypoint ----------------------------------------------------------------
+COPY --chown={{user_uid}}:{{user_gid}} scripts/entrypoint.sh {{user_home}}/entrypoint.sh
+RUN chmod +x {{user_home}}/entrypoint.sh
+
+WORKDIR {{project_dir}}
+
+ENTRYPOINT ["{{user_home}}/entrypoint.sh"]
+CMD ["amplifier", "tool", "invoke", "recipes", "operation=execute", \
+     "recipe_path={{project_dir}}/.dev-machine/build.yaml"]
+

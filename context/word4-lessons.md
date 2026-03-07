@@ -172,3 +172,52 @@ New machines MUST inherit ALL three layers. The temptation is to start simple ("
 5. More failures ensue until the full three-layer stack is rebuilt
 
 **Start with the full stack. You cannot incrementally arrive at robustness.**
+
+## Post-Deployment Failure Patterns (March 2026)
+
+After deploying dev machines to three projects (openM365, safeguard, universal-app),
+several new failure patterns emerged that weren't present in the original word4 machine.
+
+### New Failures Observed
+
+| Observed Failure | Root Cause | Mechanism Added |
+|------------------|-----------|-----------------|
+| Container tools have broken shebangs after USER switch | Amplifier installed as root, shebangs point to `/root/.local/...` | Install amplifier AFTER `USER` switch so shebangs resolve to correct home |
+| SSH git clones fail inside container | `openssh-client` not installed in image | Add `openssh-client` to system packages when bundle uses SSH git URLs |
+| Named volume owned by root | `.amplifier` directory doesn't exist when Docker creates the named volume | Pre-create `~/.amplifier` directory before volume mount (Docker inherits ownership) |
+| Config not seeded on first run | Entrypoint doesn't copy `settings.yaml` from `/config/` mount | Entrypoint must seed BOTH `keys.env` AND `settings.yaml` from `/config/` to `~/.amplifier/` |
+| User creation fails on node base images | `useradd` fails if UID 1000 already exists as `node` | Use idempotent creation: `groupadd -f` + check `id -u` before `useradd` |
+| Monitor log becomes root-owned after reboot | Docker writes to `monitor.log` as root during container restart | Monitor script self-heals ownership: `chown` at top of every run |
+| Host cron survives reboot but container doesn't | Cron restarts with OS but container needs manual restart | Watchdog (cron) detects stopped container and auto-restarts |
+| Cached bundle clone corrupted/incomplete | Network interruption during first-time bundle preparation | Amplifier detects invalid clones and retries; entrypoint retry loop handles transient failures |
+| SSH_AUTH_SOCK not available in container | Host doesn't have SSH agent running (e.g., after reboot) | Compose uses `${SSH_AUTH_SOCK:-/dev/null}` fallback; container starts without SSH (push fails gracefully) |
+
+### Template Gaps Discovered
+
+1. **Dockerfile template was truncated** -- Missing the entire bottom half (user creation,
+   tool installs, git config, ENTRYPOINT). The ROBUSTNESS-PLAN marked items as done but
+   the template file itself was incomplete. **Lesson:** Verify template OUTPUT, not just
+   checklist items.
+
+2. **`{{username}}` undocumented** -- Used in Dockerfile template but not listed in
+   `templates-reference.md`. **Lesson:** Every template variable must be documented.
+
+3. **`openssh-client` not in default system packages** -- Required when the active bundle
+   references private repos via SSH. **Lesson:** The machine generator should detect SSH
+   git URLs in the host's `settings.yaml` and add `openssh-client` automatically.
+
+### Updated Robustness Verification Checklist
+
+Add these to the existing checklist:
+
+**Container layer (additions):**
+- [ ] Amplifier installed as non-root user (shebangs point to `$HOME/.local/bin/`)
+- [ ] `openssh-client` installed if bundle uses SSH git URLs
+- [ ] `~/.amplifier` directory pre-created before named volume mount
+- [ ] Entrypoint seeds BOTH `keys.env` AND `settings.yaml` from `/config/`
+- [ ] User creation is idempotent (handles pre-existing UID/GID)
+- [ ] PATH includes `$HOME/.local/bin` for non-root tool installs
+
+**Host monitoring layer (additions):**
+- [ ] Monitor self-heals log file ownership at start of every run
+- [ ] Watchdog handles container stopped state (not just crashed)

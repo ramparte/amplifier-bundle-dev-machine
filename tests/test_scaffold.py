@@ -33,6 +33,7 @@ def _parse_frontmatter(content):
 # bundle.md tests
 # ---------------------------------------------------------------------------
 
+
 class TestBundleMd:
     def test_bundle_md_exists(self):
         assert os.path.isfile(os.path.join(REPO_ROOT, "bundle.md"))
@@ -87,6 +88,7 @@ class TestBundleMd:
 # behaviors/dev-machine.yaml tests
 # ---------------------------------------------------------------------------
 
+
 class TestBehaviorYaml:
     def test_behavior_file_exists(self):
         assert os.path.isfile(os.path.join(REPO_ROOT, "behaviors", "dev-machine.yaml"))
@@ -129,29 +131,30 @@ class TestBehaviorYaml:
 # README.md tests
 # ---------------------------------------------------------------------------
 
+
 class TestReadme:
     def test_readme_exists(self):
         assert os.path.isfile(os.path.join(REPO_ROOT, "README.md"))
 
-    def test_readme_has_quick_start(self):
+    def test_readme_has_core_idea(self):
         content = _read_file("README.md")
-        assert "## Quick Start" in content
+        assert "## The Core Idea" in content
 
-    def test_readme_has_what_it_does(self):
+    def test_readme_has_workflow(self):
         content = _read_file("README.md")
-        assert "## What It Does" in content
+        assert "## The Workflow" in content
 
-    def test_readme_has_generated_output(self):
+    def test_readme_has_running_the_machine(self):
         content = _read_file("README.md")
-        assert "## Generated Output" in content
-
-    def test_readme_has_the_pattern(self):
-        content = _read_file("README.md")
-        assert "## The Pattern" in content
+        assert "## Running the Machine" in content
 
     def test_readme_has_license(self):
         content = _read_file("README.md")
         assert "## License" in content
+
+    def test_readme_has_installation(self):
+        content = _read_file("README.md")
+        assert "## Installation" in content
 
     def test_readme_mentions_three_phases(self):
         content = _read_file("README.md")
@@ -164,16 +167,20 @@ class TestReadme:
 # Directory structure tests
 # ---------------------------------------------------------------------------
 
+
 class TestDirectories:
-    @pytest.mark.parametrize("dirname", [
-        "agents",
-        "modes",
-        "context",
-        "templates",
-        os.path.join("templates", "recipes"),
-        "behaviors",
-        os.path.join("docs", "plans"),
-    ])
+    @pytest.mark.parametrize(
+        "dirname",
+        [
+            "agents",
+            "modes",
+            "context",
+            "templates",
+            os.path.join("templates", "recipes"),
+            "behaviors",
+            os.path.join("docs", "plans"),
+        ],
+    )
     def test_directory_exists(self, dirname):
         full_path = os.path.join(REPO_ROOT, dirname)
         assert os.path.isdir(full_path), f"Directory {dirname} does not exist"
@@ -182,6 +189,7 @@ class TestDirectories:
 # ---------------------------------------------------------------------------
 # YAML parsing tests
 # ---------------------------------------------------------------------------
+
 
 class TestYamlValidity:
     def test_behavior_yaml_valid(self):

@@ -52,7 +52,8 @@ refuse to proceed if any are missing.
 | `base_image` | Docker base image | `python:3.12-slim` |
 | `uv_version` | Pinned uv version | `0.10.4` |
 | `user_home` | Container user home directory (must match host) | `/home/$USER` |
-| `system_packages` | Additional apt packages | none |
+| `username` | Container username; must equal `basename $user_home` | `samschillace` |
+| `system_packages` | Additional apt packages (include `openssh-client` if bundle uses SSH git URLs) | none |
 | `node_setup` | Node.js installation commands (empty if not needed) | none |
 | `python_dev_tools` | Python dev tool installs (ruff, pyright) | none |
 | `extra_pip_packages` | Additional system pip packages | none |
