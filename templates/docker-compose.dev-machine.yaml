@@ -38,7 +38,7 @@ services:
       # -- SSH agent socket -- for git push from recipe infrastructure -----------
       # Key has a passphrase; we forward the host's ssh-agent instead of raw keys.
       # If the agent socket dies, push fails gracefully (on_error: continue).
-      - ${SSH_AUTH_SOCK}:/run/ssh-agent.sock:ro
+      - ${SSH_AUTH_SOCK:-/dev/null}:/run/ssh-agent.sock:ro
 
       # -- SSH known_hosts -- so git doesn't prompt on first push ---------------
       - ${HOME}/.ssh/known_hosts:${HOME}/.ssh/known_hosts:ro
