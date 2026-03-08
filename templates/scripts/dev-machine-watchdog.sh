@@ -21,13 +21,29 @@ COMMIT_MARKER="$PROJECT_DIR/.watchdog-last-commit"
 HEARTBEAT_FILE="$PROJECT_DIR/.dev-machine-heartbeat"
 HEARTBEAT_MAX_AGE=3600   # 60 min -- entrypoint is alive if heartbeat is fresher
 
+cd "$PROJECT_DIR" || exit 1
+
+# -- Self-heal log ownership (the #1 silent-failure mode) ----------------------
+# Docker can create this file as root. If cron can't write to it, every
+# subsequent log() call silently fails and the watchdog appears dead.
+if [ -f "$LOG_FILE" ] && [ ! -w "$LOG_FILE" ]; then
+    docker run --rm -v "$PROJECT_DIR:$PROJECT_DIR" -w "$PROJECT_DIR" \
+        --entrypoint bash "{{image_name}}" \
+        -c "chown $(id -u):$(id -g) $LOG_FILE" 2>/dev/null || true
+fi
+touch "$LOG_FILE" 2>/dev/null || { echo "FATAL: cannot write to $LOG_FILE" >&2; exit 1; }
+
+# -- Log rotation --------------------------------------------------------------
+if [ -f "$LOG_FILE" ] && [ "$(wc -l < "$LOG_FILE")" -gt 500 ]; then
+    tail -200 "$LOG_FILE" > "$LOG_FILE.tmp"
+    mv "$LOG_FILE.tmp" "$LOG_FILE"
+fi
+
 log() {
     echo "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] $*" >> "$LOG_FILE"
 }
 
 log "--- watchdog check start ---"
-
-cd "$PROJECT_DIR"
 
 # ── 1. Is the container running? ─────────────────────────────────────────────
 CONTAINER_STATUS=$(docker compose -f "$COMPOSE_FILE" ps --format json 2>/dev/null | python3 -c "
