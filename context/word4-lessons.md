@@ -220,4 +220,181 @@ Add these to the existing checklist:
 
 **Host monitoring layer (additions):**
 - [ ] Monitor self-heals log file ownership at start of every run
+- [ ] Watchdog self-heals its own log file ownership (added March 7, 2026)
 - [ ] Watchdog handles container stopped state (not just crashed)
+
+## Multi-Machine Operations Analysis (March 7, 2026)
+
+After running three machines (openM365, safeguard, universal-app) concurrently for
+several days, a cross-machine session analysis revealed new failure patterns not
+present in the original single-machine word4 deployment.
+
+### Cross-Machine Status Snapshot
+
+| Machine | Status | Iterations | Success Rate | Root Issue |
+|---------|--------|-----------|--------------|------------|
+| **safeguard** | Healthy | 228 | 100% | None — reference model |
+| **openM365** | Critical failure loop | 160 | 1.25% | Pyright build-gate + infinite retry |
+| **universal-app** | Recovering | 14 | Mixed | Stale blockers + missing deps |
+
+**Key insight:** Safeguard is the proof that the architecture works. Its 100% success
+rate across 228 iterations, handling 120 rate-limit events automatically, demonstrates
+that when the machine is set up correctly, it is genuinely robust. The other two
+machines' failures are setup/configuration gaps, not architectural flaws.
+
+### New Failure Patterns
+
+#### Pattern 1: Build-Gate Infinite Retry Loop (Critical)
+
+**Observed in:** openM365 — 158 consecutive failures burning API credits.
+
+**What happened:** A working session introduced new imports (`pydantic`, `cryptography`,
+`click`, `msal`) without adding them to the container's Python environment. The build
+gate (pyright) found 100+ type errors. STATE.yaml was marked `blocked`. Every
+subsequent iteration: read state → see blocked → check-health fails → recipe exits 1 →
+entrypoint retries in 60s → repeat forever.
+
+**Root cause:** No retry cap on the outer loop when a recipe STEP fails (as opposed to
+transient API errors). The entrypoint correctly handles CF/API failures with backoff,
+but a structural recipe failure (missing deps, broken build) gets the same retry
+treatment as a transient error.
+
+**Mechanism needed:** A `MAX_CONSECUTIVE_FAILURES` cap in the entrypoint. After N
+consecutive recipe-level failures (not CF/API), the entrypoint should:
+1. Log a clear alert: `"CRITICAL: $N consecutive recipe failures. Stopping."`
+2. Touch the heartbeat file (so watchdog knows it's intentional)
+3. Sleep indefinitely (or until STATE.yaml changes)
+
+**Why this isn't just a "missing deps" problem:** Even with perfect dependency
+management, a working session can always introduce a build-breaking change. The machine
+must degrade gracefully rather than burn cycles indefinitely.
+
+#### Pattern 2: HTTPS Clone Failures Inside Containers
+
+**Observed in:** All three machines during initial setup.
+
+**What happened:** Containers have SSH agent forwarding (for `git push`) but no HTTPS
+credential helper. Amplifier's bundle/module system clones repos via HTTPS URLs by
+default. Inside the container, these clones fail silently or hang waiting for
+credentials.
+
+**Root cause:** Two assumptions collided:
+- Amplifier assumes HTTPS works for cloning (reasonable on a dev laptop)
+- Containers have SSH but not HTTPS credentials (reasonable for Docker)
+
+**Mechanism added:** Git URL rewrite in Dockerfile:
+```bash
+git config --global url."git@github.com:".insteadOf "https://github.com/"
+```
+This transparently rewrites all HTTPS GitHub URLs to SSH, using the forwarded SSH agent.
+
+**Also required:** `openssh-client` in the system packages (needed by git's SSH
+transport). Both are now in the Dockerfile template.
+
+#### Pattern 3: pyyaml Missing from System Python
+
+**Observed in:** openM365.
+
+**What happened:** Recipe bash steps use `python3 -c "import yaml; ..."` to parse
+STATE.yaml. The container has a virtualenv Python with pyyaml, but the system Python
+(used by bash `python3`) doesn't have it. `ModuleNotFoundError: No module named 'yaml'`.
+
+**Root cause:** The Dockerfile template installs tools in a virtualenv but recipe bash
+steps invoke system python.
+
+**Mechanism added:** `pip install --break-system-packages pyyaml` in the Dockerfile
+template, ensuring system python can parse YAML in recipe bash steps.
+
+#### Pattern 4: Empty Session Accumulation
+
+**Observed in:** All three machines.
+
+| Machine | Total Sessions | Empty | Empty % |
+|---------|---------------|-------|---------|
+| openM365 | 175 | 170 | 97% |
+| safeguard | 539 | 374 | 69% |
+| universal-app | 95 | 91 | 96% |
+
+**What happens:** Each recipe iteration creates a session directory. If the recipe
+completes quickly (no-op, fast exit, check-health failure), the session dir has an
+empty transcript. Over time, hundreds of empty directories accumulate.
+
+**Impact:** Disk bloat and noise in session listings. No functional harm.
+
+**Mechanism needed:** Post-iteration cleanup hook that removes session directories
+with 0-line transcripts. Or: the recipe framework should not create a session dir
+until the first LLM turn actually occurs.
+
+#### Pattern 5: Stale Blockers Preventing Machine Progress
+
+**Observed in:** universal-app (F-096 Visual Theme Builder permanently blocked).
+
+**What happens:** A feature is marked `blocked` with a detailed reason. The machine
+correctly routes around it, but the feature sits permanently blocked because no
+automated process validates whether the blocker is still real.
+
+**Current mitigation:** The monitor template already auto-verifies BUILD-related
+blockers (runs the build command, clears if it passes). But FEATURE-level blockers
+(spec compliance, architectural issues) have no auto-verification path.
+
+**Mechanism needed:** A blocker aging policy. Features blocked for >N epochs without
+human attention should be flagged in the monitor log with increasing urgency, or
+automatically moved to a "deferred" state so they don't clutter active feature counts.
+
+### The Safeguard Success Pattern
+
+Safeguard maintained 100% success across 228 iterations. Why?
+
+1. **Clean dependency management** — All deps installed correctly from the start.
+   Working sessions never introduced imports without corresponding installs.
+2. **No build-breaking changes** — The project's tech stack (Python) has more
+   forgiving type checking than openM365's TypeScript/pyright setup.
+3. **Blocker-free operation** — STATE.yaml `blockers: []` throughout, so
+   check-health always skipped cleanly.
+4. **Rate limiting handled transparently** — 120 sessions hit rate limits but
+   Amplifier's built-in retry logic recovered every time.
+
+**Lesson:** The dev-machine architecture IS robust when properly configured. Most
+failures are in the gap between "template generated" and "machine fully operational"
+— the setup/configuration phase.
+
+### Robustness Improvements Made (March 7, 2026)
+
+| Fix | Applied To | Commit |
+|-----|-----------|--------|
+| Added `openssh-client` to system packages | Template + all 3 machines | `6f3ab26` / per-machine |
+| Added git SSH URL rewrite | Template + all 3 machines | `6f3ab26` / per-machine |
+| Added `pyyaml` to system python | openM365 (others already had it) | `01407f8` |
+| Pre-seeded `.amplifier/cache` from host | All 3 machines (runtime) | — |
+| Added log ownership self-heal to watchdog | Template | `47bcef6` |
+| Cleared stale blockers in universal-app | universal-app STATE.yaml | — |
+
+### Outstanding Items (Not Yet Implemented)
+
+1. **`MAX_CONSECUTIVE_FAILURES` cap in entrypoint** — Prevent infinite retry loops
+   on structural (non-transient) recipe failures. This is the single most impactful
+   remaining gap.
+2. **Empty session cleanup** — Post-iteration hook to prune 0-transcript sessions.
+3. **Blocker aging policy** — Auto-flag or auto-defer features blocked for >N epochs.
+4. **Post-mortem template** — Structured format for capturing future failure events
+   (date, failure mode, root cause, mechanism added, verification) rather than
+   narrative additions to this document.
+5. **Smoke test recipe for generated machines** — Automated validation that a newly
+   generated machine has all three recovery layers working before entering production.
+   (Deferred from Phase 3 of ROBUSTNESS-PLAN.md.)
+
+### The "First Night" Principle
+
+Every new machine will fail on its first overnight run. This is not a prediction;
+it is an observation from deploying four machines. The failures are always in the
+gap between what the template provides and what the specific project needs:
+
+- word4: CF backoff missing → 514-attempt incident
+- openM365: pyyaml + SSH rewrite missing → clone failures + yaml parse errors
+- safeguard: Initial user creation collision → container wouldn't start
+- universal-app: Build command misconfigured → health check always fails
+
+**Mitigation:** Accept that the first night will fail. Design the machine to fail
+LOUDLY (not silently) and CHEAPLY (not burning API credits in tight loops). The
+`MAX_CONSECUTIVE_FAILURES` cap is the key mechanism for this — it turns an expensive
+silent failure into a cheap loud one.
