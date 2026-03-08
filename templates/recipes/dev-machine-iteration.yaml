@@ -286,5 +286,32 @@ steps:
       except Exception as e:
           print(json.dumps({"status": "blocked", "session_count": "{{session_count}}", "error": str(e)}))
       PYEOF
+
+      # --- Empty session cleanup ---
+      # Sweep session directories with empty/near-empty transcripts
+      # These accumulate from crashed or instantly-failed sessions
+      SESSIONS_DIR="$HOME/.amplifier/sessions"
+      if [ -d "$SESSIONS_DIR" ]; then
+        CLEANED=0
+        for session_dir in "$SESSIONS_DIR"/*/; do
+          [ -d "$session_dir" ] || continue
+          events_file="$session_dir/events.jsonl"
+          # Remove sessions with no events file or empty events file
+          if [ ! -f "$events_file" ] || [ ! -s "$events_file" ]; then
+            rm -rf "$session_dir"
+            CLEANED=$((CLEANED + 1))
+            continue
+          fi
+          # Remove sessions with very few lines (< 3 lines = no real work done)
+          line_count=$(wc -l < "$events_file" 2>/dev/null || echo "0")
+          if [ "$line_count" -lt 3 ]; then
+            rm -rf "$session_dir"
+            CLEANED=$((CLEANED + 1))
+          fi
+        done
+        if [ "$CLEANED" -gt 0 ]; then
+          echo "Cleaned up $CLEANED empty/near-empty session directories"
+        fi
+      fi
     output: "iteration_result"
     parse_json: true

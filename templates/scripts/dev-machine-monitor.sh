@@ -188,12 +188,18 @@ if [ "$cpu" = "0.00%" ] && [ "$heartbeat_age" != "n/a" ] && [ "$heartbeat_age" -
     log "INFO: Entrypoint alive (heartbeat ${heartbeat_age}s ago) but 0% CPU — likely CF backoff"
 fi
 
-# Pattern C: Stale blockers — verify build blockers are still valid
-# If the blocker description mentions build/type tooling, run the build to check
-# whether it's genuinely still broken. Auto-clear if it passes.
+# Pattern C: Stale blockers — verify build blockers + apply blocker aging policy
+# Step 1: If any blocker description mentions build tooling, run the build to
+#         confirm it's still broken. Auto-clear on success (top-level list AND
+#         per-feature BUILD entries). Log and continue to aging on failure.
+# Step 2: Walk every features[name].blockers[] entry that has a 'since' epoch.
+#         Age = progress.current_epoch - blocker.since. Log with escalating
+#         urgency; auto-defer the owning feature at 20+ epochs.
 if [ "$has_blockers" = "yes" ]; then
     blocker_desc=$(sed -n '/^blockers:/,/^[a-z]/p' "$PROJECT_DIR/STATE.yaml" 2>/dev/null | grep "description:" | head -1)
+    _has_build_blocker="no"
     if echo "$blocker_desc" | grep -qiE "build|typescript|type.?check|pnpm|npm|compile"; then
+        _has_build_blocker="yes"
         log "VERIFY: Build-related blocker detected. Running build to verify..."
         build_output=$(docker exec "$CONTAINER" bash -c "cd $PROJECT_DIR && $BUILD_COMMAND" 2>&1)
         build_exit=$?
@@ -203,13 +209,99 @@ if [ "$has_blockers" = "yes" ]; then
 import yaml
 state = yaml.safe_load(open('$PROJECT_DIR/STATE.yaml'))
 state['blockers'] = []
+for feat_data in state.get('features', {}).values():
+    if isinstance(feat_data, dict) and isinstance(feat_data.get('blockers'), list):
+        feat_data['blockers'] = [
+            b for b in feat_data['blockers']
+            if not (isinstance(b, dict) and b.get('type', '').upper() == 'BUILD')
+        ]
 with open('$PROJECT_DIR/STATE.yaml', 'w') as f:
     yaml.dump(state, f, default_flow_style=False, sort_keys=False)
 " 2>/dev/null || true
         else
             log "ALERT: Build-related blocker is real. Build still fails."
         fi
-    else
+    fi
+
+    # Step 2: Blocker aging — read current epoch from progress.current_epoch,
+    # compute age for each per-feature blocker that carries a 'since' field,
+    # emit escalating log lines, and write deferred status for 20+ epoch cases.
+    _aging_output=$(python3 -c "
+import yaml, sys
+try:
+    state = yaml.safe_load(open('$PROJECT_DIR/STATE.yaml'))
+except Exception:
+    sys.exit(0)
+
+features       = state.get('features') or {}
+current_epoch  = (state.get('progress') or {}).get('current_epoch', 0)
+changed        = False
+lines          = []
+no_since_count = 0
+
+for feat_name, feat_data in (features.items() if isinstance(features, dict) else []):
+    if not isinstance(feat_data, dict):
+        continue
+    for blocker in (feat_data.get('blockers') or []):
+        if not isinstance(blocker, dict):
+            continue
+        since = blocker.get('since')
+        if since is None:
+            no_since_count += 1
+            continue
+        try:
+            age = int(current_epoch) - int(since)
+        except (ValueError, TypeError):
+            no_since_count += 1
+            continue
+        if age < 1:
+            continue
+        label = str(blocker.get('description') or blocker.get('type') or 'unknown')[:60]
+        if age >= 20:
+            lines.append(
+                f'CRITICAL: Blocker \"{label}\" stale ({age} epochs)'
+                f' - auto-deferring feature \"{feat_name}\"'
+            )
+            lines.append(
+                f'AUTO-DEFER: Feature \"{feat_name}\" moved to deferred'
+                f' (blocker aged {age} epochs)'
+            )
+            feat_data['status'] = 'deferred'
+            changed = True
+        elif age >= 11:
+            lines.append(
+                f'CRITICAL: Blocker \"{label}\" stale ({age} epochs)'
+                f' - recommend manual review or auto-defer'
+            )
+        elif age >= 6:
+            lines.append(
+                f'WARNING: Blocker \"{label}\" aging ({age} epochs)'
+                f' - may need human attention'
+            )
+        else:
+            lines.append(f'INFO: Blocker \"{label}\" present for {age} epochs')
+
+if changed:
+    with open('$PROJECT_DIR/STATE.yaml', 'w') as f:
+        yaml.dump(state, f, default_flow_style=False, sort_keys=False)
+
+# No aged entries found but un-timestamped blockers exist — keep a generic alert
+if not lines and no_since_count > 0:
+    lines.append(
+        'ALERT: STATE.yaml has active blockers (no epoch data)'
+        ' - machine may need human attention'
+    )
+
+print('\n'.join(lines))
+" 2>/dev/null) || true
+
+    if [ -n "$_aging_output" ]; then
+        while IFS= read -r _aging_line; do
+            [ -n "$_aging_line" ] && log "$_aging_line"
+        done <<< "$_aging_output"
+    elif [ "$_has_build_blocker" = "no" ]; then
+        # Blockers present but no per-feature entries found (legacy schema or
+        # top-level-only list). Preserve the original generic alert.
         log "ALERT: STATE.yaml has active blockers (not build-related) — machine may need human attention"
     fi
 fi

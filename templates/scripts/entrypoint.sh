@@ -24,6 +24,7 @@ SUCCESS_RESET=600        # if a run lasts > 10 min, reset backoff (it was workin
 CF_CRASH_THRESHOLD=120   # if crash < 2 min, assume Cloudflare
 INTER_SESSION_COOLDOWN={{inter_session_cooldown}}  # default 60s pause between successful sessions to reduce CF triggers
 CF_BACKOFF_MAX={{cf_backoff_max}}      # default 2700 = 45 min ceiling for CF preflight exponential backoff
+MAX_CONSECUTIVE_FAILURES=${MAX_CONSECUTIVE_FAILURES:-5}  # halt after N back-to-back structural failures
 
 # Heartbeat file: the entrypoint touches this before every significant sleep
 # so the external watchdog can distinguish "alive, managing its own backoff"
@@ -108,6 +109,7 @@ fi
 # -- Run command with retry loop ----------------------------------------------
 backoff=$INITIAL_BACKOFF
 attempt=0
+consecutive_structural_failures=0
 
 while true; do
     attempt=$((attempt + 1))
@@ -176,6 +178,8 @@ while true; do
         exit_code=1
     fi
 
+    # Save tail before deleting -- used by post-mortem if we hit the failure cap
+    last_log_lines=$(tail -20 "$RECIPE_LOG" 2>/dev/null || echo "(no log available)")
     rm -f "$RECIPE_LOG"
 
     # On success: loop back for next session (don't exit -- container stays alive)
@@ -185,6 +189,7 @@ while true; do
         echo "[entrypoint] Cooling down ${INTER_SESSION_COOLDOWN}s before next session..."
         echo ""
         backoff=$INITIAL_BACKOFF
+        consecutive_structural_failures=0
         touch_heartbeat
         sleep $INTER_SESSION_COOLDOWN
         continue
@@ -207,6 +212,7 @@ while true; do
         fi
         echo "[entrypoint] Using extended backoff: ${CF_BACKOFF}s (attempt $attempt)"
         echo ""
+        consecutive_structural_failures=0
         touch_heartbeat
         sleep $CF_BACKOFF
         # Don't increase backoff further -- CF_BACKOFF is already long
@@ -225,5 +231,60 @@ while true; do
     backoff=$((backoff * 2))
     if [ $backoff -gt $MAX_BACKOFF ]; then
         backoff=$MAX_BACKOFF
+    fi
+
+    # -- Classify and track consecutive structural failures ----------------------
+    # Structural = long-running failure (>= 60s) or explicit recipe_internal_fail.
+    # Quick crashes that slipped past the CF filter are still treated as transient.
+    if [ $duration -lt 60 ] && [ "$recipe_internal_fail" != "true" ]; then
+        echo "[entrypoint] Quick crash (${duration}s < 60s) -- transient, structural counter unchanged (${consecutive_structural_failures}/${MAX_CONSECUTIVE_FAILURES})."
+    else
+        consecutive_structural_failures=$((consecutive_structural_failures + 1))
+        echo "[entrypoint] Structural failure #${consecutive_structural_failures}/${MAX_CONSECUTIVE_FAILURES} (exit ${exit_code}, ${duration}s)."
+
+        if [ $consecutive_structural_failures -ge $MAX_CONSECUTIVE_FAILURES ]; then
+            echo ""
+            echo "[entrypoint] CRITICAL: MAX_CONSECUTIVE_FAILURES ($MAX_CONSECUTIVE_FAILURES) reached. Halting retry loop."
+            echo ""
+
+            # Write a post-mortem file for human review
+            POSTMORTEM_FILE="{{project_dir}}/.dev-machine-postmortem"
+            {
+                echo "=== Dev Machine Post-Mortem ==="
+                echo "Date:                        $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+                echo "Consecutive structural failures: $consecutive_structural_failures / $MAX_CONSECUTIVE_FAILURES"
+                echo "Last exit code:              $exit_code"
+                echo "Last session duration:       ${duration}s"
+                echo "Total attempts:              $attempt"
+                echo ""
+                echo "=== Last log lines ==="
+                echo "$last_log_lines"
+            } > "$POSTMORTEM_FILE"
+            echo "[entrypoint] Post-mortem written to $POSTMORTEM_FILE"
+
+            # Record STATE.yaml mtime so a human can resume by touching/modifying it
+            STATE_FILE="{{project_dir}}/STATE.yaml"
+            state_mtime=$(stat -c '%Y' "$STATE_FILE" 2>/dev/null || echo "0")
+
+            touch_heartbeat
+
+            # Halt loop: keep the heartbeat alive every 5 minutes so the watchdog
+            # knows this is an intentional pause, not a hang.
+            # A human can resume by editing STATE.yaml (e.g. clearing a blocking task).
+            echo "[entrypoint] Entering halt loop. Modify STATE.yaml or restart the container to resume."
+            while true; do
+                sleep 300
+                touch_heartbeat
+                new_mtime=$(stat -c '%Y' "$STATE_FILE" 2>/dev/null || echo "0")
+                if [ "$new_mtime" != "$state_mtime" ]; then
+                    echo ""
+                    echo "[entrypoint] STATE.yaml modified -- clearing halt, resuming retry loop."
+                    echo ""
+                    consecutive_structural_failures=0
+                    break
+                fi
+                echo "[entrypoint] Still halted ($(date -u '+%H:%M:%S UTC')). Modify STATE.yaml to resume."
+            done
+        fi
     fi
 done

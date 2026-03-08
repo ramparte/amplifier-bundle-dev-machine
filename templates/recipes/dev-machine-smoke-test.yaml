@@ -1,0 +1,348 @@
+# =============================================================================
+# {{project_name}}-smoke-test: Structural validation of the generated dev machine
+# =============================================================================
+#
+# Run BEFORE starting the dev machine to confirm all required files,
+# configurations, and robustness mechanisms are in place.
+#
+# Each step is an independent structural check. All steps run even when
+# earlier ones fail. The final step aggregates all results, prints a
+# PASS/FAIL report, and exits non-zero if any check failed.
+#
+# Usage:
+#   amplifier recipe execute .dev-machine/recipes/dev-machine-smoke-test.yaml
+#
+# =============================================================================
+
+name: "{{project_name}}-smoke-test"
+description: "Structural smoke test for the {{project_name}} dev machine. Validates file existence, YAML validity, Docker config, STATE.yaml content, and robustness script patterns."
+version: "1.0.0"
+author: "{{project_name}} Development Machine"
+tags: ["smoke-test", "validation", "dev-machine", "{{project_name}}"]
+
+context:
+  base_dir: ".dev-machine"
+
+steps:
+  # ---------------------------------------------------------------------------
+  # Step 0: Preflight -- must be run from the project root (where .dev-machine/ lives)
+  # ---------------------------------------------------------------------------
+  - id: "preflight"
+    type: "bash"
+    command: |
+      if [ ! -d ".dev-machine" ]; then
+          echo "ERROR: .dev-machine/ directory not found."
+          echo ""
+          echo "Run this smoke test from the project root -- the directory"
+          echo "that contains the .dev-machine/ folder."
+          exit 1
+      fi
+      echo "Preflight OK: .dev-machine/ directory found."
+    on_error: "fail"
+
+  # ---------------------------------------------------------------------------
+  # Step 1: File existence -- all required .dev-machine/ files must be present;
+  #         scripts must be executable
+  # ---------------------------------------------------------------------------
+  - id: "check-file-existence"
+    type: "bash"
+    command: |
+      python3 << 'PYEOF'
+      import json, os, stat
+
+      BASE = ".dev-machine"
+      failed = []
+      passed = []
+
+      # (path relative to .dev-machine/, must_be_executable)
+      required = [
+          ("scripts/entrypoint.sh",                 True),
+          ("scripts/dev-machine-watchdog.sh",        True),
+          ("scripts/dev-machine-monitor.sh",         True),
+          ("STATE.yaml",                             False),
+          ("AGENTS.md",                              False),
+          ("SCRATCH.md",                             False),
+          ("CONTEXT-TRANSFER.md",                    False),
+          ("POST-MORTEM.md",                         False),
+          ("dev-machine.Dockerfile",                 False),
+          ("docker-compose.dev-machine.yaml",        False),
+          ("recipes/dev-machine-build.yaml",         False),
+          ("recipes/dev-machine-iteration.yaml",     False),
+          ("recipes/dev-machine-health-check.yaml",  False),
+      ]
+
+      for relpath, must_exec in required:
+          full = os.path.join(BASE, relpath)
+          if not os.path.isfile(full):
+              failed.append(f"MISSING: {full}")
+              print(f"  [FAIL] MISSING: {full}")
+          elif must_exec:
+              mode = os.stat(full).st_mode
+              if not (mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)):
+                  failed.append(f"NOT EXECUTABLE: {full}")
+                  print(f"  [FAIL] NOT EXECUTABLE: {full}")
+              else:
+                  passed.append(full)
+                  print(f"  [PASS] {full} (executable)")
+          else:
+              passed.append(full)
+              print(f"  [PASS] {full}")
+
+      print(json.dumps({
+          "status": "fail" if failed else "pass",
+          "passed": len(passed),
+          "failed": len(failed),
+          "failures": failed
+      }))
+      PYEOF
+    output: "file_check"
+    parse_json: true
+    on_error: "continue"
+
+  # ---------------------------------------------------------------------------
+  # Step 2: YAML validity -- STATE.yaml and all recipe files must parse cleanly
+  # ---------------------------------------------------------------------------
+  - id: "check-yaml-validity"
+    type: "bash"
+    command: |
+      python3 << 'PYEOF'
+      import json, yaml, os, glob
+
+      failed = []
+      passed = []
+
+      targets = [".dev-machine/STATE.yaml"] + sorted(glob.glob(".dev-machine/recipes/*.yaml"))
+
+      for path in targets:
+          if not os.path.isfile(path):
+              failed.append(f"MISSING (cannot check): {path}")
+              print(f"  [SKIP] MISSING: {path}")
+              continue
+          try:
+              with open(path) as fh:
+                  doc = yaml.safe_load(fh)
+              if doc is None:
+                  failed.append(f"EMPTY YAML: {path}")
+                  print(f"  [FAIL] EMPTY YAML: {path}")
+              else:
+                  passed.append(path)
+                  print(f"  [PASS] {path}")
+          except yaml.YAMLError as e:
+              msg = str(e).split("\n")[0]
+              failed.append(f"PARSE ERROR in {path}: {msg}")
+              print(f"  [FAIL] PARSE ERROR: {path}: {msg}")
+
+      print(json.dumps({
+          "status": "fail" if failed else "pass",
+          "passed": len(passed),
+          "failed": len(failed),
+          "failures": failed
+      }))
+      PYEOF
+    output: "yaml_check"
+    parse_json: true
+    on_error: "continue"
+
+  # ---------------------------------------------------------------------------
+  # Step 3: Docker validity -- docker compose config parse check
+  #         Skipped gracefully if docker is not available on PATH
+  # ---------------------------------------------------------------------------
+  - id: "check-docker-config"
+    type: "bash"
+    command: |
+      COMPOSE_FILE=".dev-machine/docker-compose.dev-machine.yaml"
+
+      if ! command -v docker &>/dev/null; then
+          echo "  [SKIP] docker not found on PATH -- skipping docker config check"
+          echo '{"status": "skip", "reason": "docker not available", "passed": 0, "failed": 0, "failures": []}'
+          exit 0
+      fi
+
+      if [ ! -f "$COMPOSE_FILE" ]; then
+          echo "  [SKIP] $COMPOSE_FILE not found -- skipping docker config check"
+          echo '{"status": "skip", "reason": "compose file missing", "passed": 0, "failed": 0, "failures": []}'
+          exit 0
+      fi
+
+      echo "  Running: docker compose -f $COMPOSE_FILE config --quiet"
+      if docker compose -f "$COMPOSE_FILE" config --quiet 2>&1; then
+          echo "  [PASS] docker compose config is valid"
+          echo '{"status": "pass", "passed": 1, "failed": 0, "failures": []}'
+      else
+          echo "  [FAIL] docker compose config reported errors (see output above)"
+          echo '{"status": "fail", "passed": 0, "failed": 1, "failures": ["docker compose config failed for .dev-machine/docker-compose.dev-machine.yaml"]}'
+      fi
+    output: "docker_check"
+    parse_json: true
+    on_error: "continue"
+
+  # ---------------------------------------------------------------------------
+  # Step 4: STATE.yaml content -- required fields must be present and populated
+  # ---------------------------------------------------------------------------
+  - id: "check-state-content"
+    type: "bash"
+    command: |
+      python3 << 'PYEOF'
+      import json, yaml
+
+      failed = []
+      passed = []
+
+      try:
+          with open(".dev-machine/STATE.yaml") as f:
+              state = yaml.safe_load(f)
+
+          if not isinstance(state, dict):
+              failed.append("STATE.yaml does not contain a YAML mapping at top level")
+              print("  [FAIL] STATE.yaml is not a mapping")
+          else:
+              # project_name
+              if state.get("project_name"):
+                  passed.append("project_name")
+                  print(f"  [PASS] project_name = \"{state['project_name']}\"")
+              else:
+                  failed.append("project_name missing or empty")
+                  print("  [FAIL] project_name missing or empty")
+
+              # features non-empty
+              features = state.get("features")
+              if features and len(features) > 0:
+                  count = len(features)
+                  passed.append("features")
+                  print(f"  [PASS] features non-empty ({count} feature(s))")
+              else:
+                  failed.append("features list is missing or empty")
+                  print("  [FAIL] features list is missing or empty")
+
+              # progress.current_epoch
+              progress = state.get("progress")
+              if isinstance(progress, dict) and "current_epoch" in progress:
+                  passed.append("progress.current_epoch")
+                  print(f"  [PASS] progress.current_epoch = {progress['current_epoch']}")
+              else:
+                  failed.append("progress.current_epoch missing (expected under state.progress)")
+                  print("  [FAIL] progress.current_epoch missing")
+
+      except FileNotFoundError:
+          failed.append("STATE.yaml not found")
+          print("  [FAIL] .dev-machine/STATE.yaml not found")
+      except yaml.YAMLError as e:
+          failed.append(f"STATE.yaml YAML parse error: {e}")
+          print(f"  [FAIL] STATE.yaml YAML parse error: {e}")
+
+      print(json.dumps({
+          "status": "fail" if failed else "pass",
+          "passed": len(passed),
+          "failed": len(failed),
+          "failures": failed
+      }))
+      PYEOF
+    output: "state_check"
+    parse_json: true
+    on_error: "continue"
+
+  # ---------------------------------------------------------------------------
+  # Step 5: Robustness patterns -- key mechanisms must be present in scripts
+  # ---------------------------------------------------------------------------
+  - id: "check-robustness-patterns"
+    type: "bash"
+    command: |
+      python3 << 'PYEOF'
+      import json
+
+      failed = []
+      passed = []
+
+      # (filepath, pattern_string, human description)
+      checks = [
+          (".dev-machine/scripts/entrypoint.sh",          "MAX_CONSECUTIVE_FAILURES", "consecutive failure counter"),
+          (".dev-machine/scripts/entrypoint.sh",          "touch_heartbeat",          "heartbeat touch function"),
+          (".dev-machine/scripts/entrypoint.sh",          "cf_failure",               "CF detection pattern"),
+          (".dev-machine/scripts/dev-machine-monitor.sh", "blocker",                  "blocker aging logic"),
+          (".dev-machine/scripts/dev-machine-watchdog.sh","heartbeat",                "heartbeat staleness check"),
+      ]
+
+      file_cache = {}
+      for filepath, pattern, description in checks:
+          if filepath not in file_cache:
+              try:
+                  with open(filepath) as fh:
+                      file_cache[filepath] = fh.read()
+              except FileNotFoundError:
+                  file_cache[filepath] = None
+
+          content = file_cache[filepath]
+          label = f"{filepath}: '{pattern}'"
+
+          if content is None:
+              failed.append(f"CANNOT READ {filepath} (file missing)")
+              print(f"  [FAIL] CANNOT READ: {filepath}")
+          elif pattern in content:
+              passed.append(label)
+              print(f"  [PASS] '{pattern}' found in {filepath}  ({description})")
+          else:
+              failed.append(f"MISSING '{pattern}' in {filepath} ({description})")
+              print(f"  [FAIL] MISSING '{pattern}' in {filepath}  ({description})")
+
+      print(json.dumps({
+          "status": "fail" if failed else "pass",
+          "passed": len(passed),
+          "failed": len(failed),
+          "failures": failed
+      }))
+      PYEOF
+    output: "pattern_check"
+    parse_json: true
+    on_error: "continue"
+
+  # ---------------------------------------------------------------------------
+  # Step 6: Summary -- aggregate all results, print report, exit non-zero on failure
+  # ---------------------------------------------------------------------------
+  - id: "smoke-test-summary"
+    type: "bash"
+    command: |
+      echo ""
+      echo "============================================================"
+      echo "  {{project_name}} DEV MACHINE -- SMOKE TEST RESULTS"
+      echo "============================================================"
+      echo ""
+
+      TOTAL_FAIL=0
+
+      report_check() {
+        local label="$1"
+        local status="$2"
+        local n_passed="$3"
+        local n_failed="$4"
+        case "$status" in
+          pass) printf "  %-30s  PASS  (%s checks)\n" "$label" "$n_passed" ;;
+          skip) printf "  %-30s  SKIP\n" "$label" ;;
+          *)
+            printf "  %-30s  FAIL  (%s failed)\n" "$label" "$n_failed"
+            TOTAL_FAIL=$((TOTAL_FAIL + 1))
+            ;;
+        esac
+      }
+
+      report_check "File Existence"       "{{file_check.status}}"    "{{file_check.passed}}"    "{{file_check.failed}}"
+      report_check "YAML Validity"        "{{yaml_check.status}}"    "{{yaml_check.passed}}"    "{{yaml_check.failed}}"
+      report_check "Docker Config"        "{{docker_check.status}}"  "{{docker_check.passed}}"  "{{docker_check.failed}}"
+      report_check "STATE.yaml Content"   "{{state_check.status}}"   "{{state_check.passed}}"   "{{state_check.failed}}"
+      report_check "Robustness Patterns"  "{{pattern_check.status}}" "{{pattern_check.passed}}" "{{pattern_check.failed}}"
+
+      echo ""
+      echo "------------------------------------------------------------"
+      if [ "$TOTAL_FAIL" -eq 0 ]; then
+          echo "  RESULT: ALL CHECKS PASSED"
+          echo "  Dev machine is structurally sound and ready to run."
+      else
+          echo "  RESULT: $TOTAL_FAIL CHECK(S) FAILED"
+          echo "  Fix the failures above before starting the dev machine."
+      fi
+      echo "------------------------------------------------------------"
+      echo ""
+
+      if [ "$TOTAL_FAIL" -gt 0 ]; then
+          exit 1
+      fi
+    on_error: "fail"

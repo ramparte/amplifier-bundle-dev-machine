@@ -369,19 +369,97 @@ failures are in the gap between "template generated" and "machine fully operatio
 | Added log ownership self-heal to watchdog | Template | `47bcef6` |
 | Cleared stale blockers in universal-app | universal-app STATE.yaml | — |
 
-### Outstanding Items (Not Yet Implemented)
+### Outstanding Items — All Resolved (March 7, 2026)
 
-1. **`MAX_CONSECUTIVE_FAILURES` cap in entrypoint** — Prevent infinite retry loops
-   on structural (non-transient) recipe failures. This is the single most impactful
-   remaining gap.
-2. **Empty session cleanup** — Post-iteration hook to prune 0-transcript sessions.
-3. **Blocker aging policy** — Auto-flag or auto-defer features blocked for >N epochs.
-4. **Post-mortem template** — Structured format for capturing future failure events
-   (date, failure mode, root cause, mechanism added, verification) rather than
-   narrative additions to this document.
-5. **Smoke test recipe for generated machines** — Automated validation that a newly
-   generated machine has all three recovery layers working before entering production.
-   (Deferred from Phase 3 of ROBUSTNESS-PLAN.md.)
+All five items were implemented on March 7, 2026. See "Robustness Mechanisms Implemented" section below for details.
+
+1. ✅ **`MAX_CONSECUTIVE_FAILURES` cap in entrypoint** — `templates/scripts/entrypoint.sh`. Configurable via env var (default 5). Distinguishes structural failures (long-running + nonzero exit) from transient (CF / quick crash). On halt: writes `POST-MORTEM.md`, touches heartbeat, sleeps until `STATE.yaml` mtime changes.
+2. ✅ **Empty session cleanup** — Post-session step in `templates/recipes/dev-machine-iteration.yaml`. Sweeps `~/.amplifier/sessions/` after every iteration; removes dirs where `events.jsonl` is absent, empty, or under 3 lines.
+3. ✅ **Blocker aging policy** — `templates/scripts/dev-machine-monitor.sh`. Tracks `since` epoch field per blocker: INFO (1–5 epochs), WARNING (6–10), CRITICAL (11–19), AUTO-DEFER (20+). Existing BUILD-blocker auto-verify logic preserved.
+4. ✅ **Post-mortem template** — `templates/POST-MORTEM.md`. Auto-populated by entrypoint on halt (timestamp, failure count, last log lines). Manual sections for root-cause classification and restart checklist.
+5. ✅ **Smoke test recipe** — `templates/recipes/dev-machine-smoke-test.yaml`. Validates file existence, YAML validity, Docker config keys, `STATE.yaml` content, and robustness mechanism presence in scripts. Run before first machine start.
+
+## Robustness Mechanisms Implemented (March 7, 2026)
+
+Five mechanisms added to close the gaps identified in the multi-machine analysis above.
+All are now standard in generated machine templates.
+
+### Mechanism 1: MAX_CONSECUTIVE_FAILURES Cap (`entrypoint.sh`)
+
+Turns the "openM365 burn loop" (158 consecutive failures burning API credits) into a cheap, loud halt.
+
+**How it works:**
+- Counts consecutive structural failures: exit nonzero after a long-running recipe (>30 s by default)
+- Transient failures (CF preflight, quick crash <30 s) reset the counter instead of incrementing it
+- At the cap: writes `POST-MORTEM.md` with timestamp and last log lines, touches heartbeat, enters `sleep 60` loop
+- Auto-resumes when `STATE.yaml` is manually modified (mtime polling)
+
+**Configuration:** `MAX_CONSECUTIVE_FAILURES` env var, default `5`.
+
+**Why the structural/transient distinction matters:** A recipe that crashes in 4 seconds is almost certainly an API blip; a recipe that runs for 5 minutes and then exits 1 is almost certainly a build-gate failure. Treating them the same causes the burn loop. Treating them differently lets CF retries keep working while capping the structural retries.
+
+### Mechanism 2: Empty Session Cleanup (`dev-machine-iteration.yaml`)
+
+Addresses the 69–97% empty session rate observed across all machines.
+
+Post-session step after every iteration:
+- Finds all dirs in `~/.amplifier/sessions/`
+- Removes any where `events.jsonl` is missing, 0 bytes, or fewer than 3 lines
+- Silent when nothing to clean; no impact on real sessions
+
+### Mechanism 3: Blocker Aging Policy (`dev-machine-monitor.sh`)
+
+Prevents features from being permanently stuck (e.g., universal-app F-096 blocked indefinitely).
+
+| Blocker Age | Severity | Action |
+|-------------|----------|--------|
+| 1–5 epochs | INFO | Log only |
+| 6–10 epochs | WARNING | Log with emphasis |
+| 11–19 epochs | CRITICAL | Log as urgent |
+| 20+ epochs | AUTO-DEFER | Move feature to `deferred` status in STATE.yaml |
+
+Requires blockers to carry a `since: <epoch>` field. The monitor computes age as `current_epoch - since`. Existing BUILD-blocker auto-verify logic (run build, clear on pass) is unchanged.
+
+### Mechanism 4: Post-Mortem Template (`templates/POST-MORTEM.md`)
+
+Replaces the current pattern of appending narrative sections to this document after every incident.
+
+Auto-populated by entrypoint on halt:
+- Machine name, timestamp, consecutive failure count, last recipe exit code
+- Last 20 lines of entrypoint log
+
+Manual sections (human fills in):
+- Root cause classification: transient / structural / config / infra
+- Steps taken to resolve
+- Mechanism added or checklist item updated
+- Restart checklist (confirm STATE.yaml fixed, clear failure count, restart container)
+
+### Mechanism 5: Smoke Test Recipe (`templates/recipes/dev-machine-smoke-test.yaml`)
+
+Automated pre-flight that catches setup gaps before the first overnight run.
+
+Validates:
+- All required template files exist (entrypoint, watchdog, monitor, docker-compose)
+- `docker-compose.yaml` is valid YAML with `restart: unless-stopped` and `network_mode: host`
+- `STATE.yaml` is present and parseable
+- `entrypoint.sh` contains `MAX_CONSECUTIVE_FAILURES` logic
+- `dev-machine-monitor.sh` contains blocker aging (`since` field) logic
+
+Run once after `dev-machine-setup` and before `docker compose up -d`.
+
+### Updated Robustness Verification Checklist (March 7, 2026 additions)
+
+Add to the checklist in "Robustness Verification Checklist" above:
+
+**Container layer:**
+- [ ] `MAX_CONSECUTIVE_FAILURES` cap present in entrypoint (default 5, configurable via env)
+- [ ] Entrypoint resumes from halt on `STATE.yaml` mtime change (no manual container restart needed)
+
+**Operational layer:**
+- [ ] Smoke test recipe run and passing before first `docker compose up -d`
+- [ ] `POST-MORTEM.md` template present in project root
+- [ ] Blockers in STATE.yaml carry `since: <epoch>` field (required for aging policy)
+- [ ] Monitor blocker aging thresholds reviewed for project's epoch cadence
 
 ### The "First Night" Principle
 
